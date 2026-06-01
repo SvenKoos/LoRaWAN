@@ -10,24 +10,30 @@ LoRaWAN implementation with temperature and humidity sensor / display based on L
 
 ## Connect sensor to T-Echo
 - connect SHT31 to T-Echo Lite using the following pins (to be verified)
-Sensor pin	T-Echo pin		Arduino pin
-VCC			3V3				3.3V power
-GND			GND				Ground
-SDA			P1.04 (PI.04)	36
-SCL			P1.03 (PI.03)	^35
+
+| Sensor pin	| T-Echo pin	| Arduino pin
+|---------------|---------------|-------------
+| VCC			| 3V3			| 3.3V power
+| GND			| GND			| Ground
+| SDA			| P1.04 (PI.04) | 36
+| SCL			| P1.03 (PI.03) | 35
 
 ## Show measurements on T-Echo
 
 
 ## Configure gateway
+- configure gateway network, internet access, LoRa band, TTN network
+[RAK7246G Quick Start Guide](https://docs.rakwireless.com/product-categories/wisgate/rak7246g/quickstart)
 
+## Register in TTN
+- register the gateway with TTN
+[RAK7246G LoRaWAN Network Server Guide](https://docs.rakwireless.com/product-categories/wisgate/rak7246g/lorawan-network-server-guide)
 
-## Get TTN keys
+## Get TTN application keys
 
 
 ## Send measurements to TTN
 - use RadioLib in LoRaWAN mode
- + implement OTAA (over the air activation) of the sensor / T-Echo
- + create the LoRaWAN payload for measurement data with CayenneLPP
- 
- 
+ - implement OTAA (over the air activation) of the sensor / T-Echo
+ - create the LoRaWAN payload for measurement data with CayenneLPP
+- use CayenneLPP library to create LoRaWAN paylod
