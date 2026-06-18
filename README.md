@@ -2,24 +2,24 @@
 LoRaWAN implementation with temperature and humidity sensor / display based on LilyGo T-Echo, LoRaWAN gateway RAK7246G / RAK5146 and TTN
 
 ## Project plan
-1. connect temperature / humidity sensor SHT31 to T-Echo Lite
-2. show the measurements on the display  of T-Echo Lite
+1. connect temperature / humidity sensor SHT31 to T-Echo Lite ==> achieved
+2. show the measurements on the display  of T-Echo Lite ==> achieved
 3. configure the gateway and register it with TTN
 4. create application in TTN and get the TTN keys
 5. extend the code on T-Echo Lite about LoRaWAN implementation (sensor authentication, measurement upload)
 
 ## 1. Connect sensor to T-Echo
-- connect SHT31 to T-Echo Lite using the following pins (to be verified)
+- connect SHT31 to T-Echo Lite using the following pins
 
 | Sensor pin	| T-Echo pin	| Arduino pin
 |---------------|---------------|-------------
 | VCC			| 3V3			| 3.3V power
 | GND			| GND			| Ground
-| SDA			| P1.04 (PI.04) | 36
-| SCL			| P1.03 (PI.03) | 35
+| SDA			| P1.03 (PI.03) | 35
+| SCL			| P1.04 (PI.04) | 36
 
 ## 2. Show measurements on T-Echo
-
+- achieved with "Sensor connected" submission to GitHub
 
 ## 3. Configure gateway
 - configure gateway network, internet access, LoRa band, TTN network
