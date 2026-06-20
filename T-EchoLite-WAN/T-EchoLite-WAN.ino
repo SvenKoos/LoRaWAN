@@ -85,6 +85,14 @@ SX1262 radio = new Module(SX1262_CS, SX1262_DIO1, SX1262_RST, SX1262_BUSY, Custo
 
 Adafruit_SHT31 sht31 = Adafruit_SHT31();  // Globales Objekt
 
+// trigger battery measurement
+bool Temp = false;
+volatile bool KET1_Triggered_Flag = false;
+
+void External_Interrupt_Triggered() {
+  KET1_Triggered_Flag = true;
+}
+
 void Set_SX1262_RF_Transmitter_Switch(bool status) {
   if (status == true) {
     digitalWrite(SX1262_RF_VC1, HIGH);  // send
@@ -264,9 +272,31 @@ void setup(void) {
   } else {
     Serial.println("SHT3x bereit.");
   }
+
+  // enable  battery measurement
+  pinMode(BATTERY_ADC_DATA, INPUT);
+  pinMode(BATTERY_MEASUREMENT_CONTROL, OUTPUT);
+  digitalWrite(BATTERY_MEASUREMENT_CONTROL, LOW);  // Turn off battery voltage measurement
+
+  attachInterrupt(nRF52840_BOOT, External_Interrupt_Triggered, FALLING);
+
+  // Set the analog reference to 3.0V (default = 3.6V)
+  analogReference(AR_INTERNAL_3_0);
+  // Set the resolution to 12-bit (0..4095)
+  analogReadResolution(12);  // Can be 8, 10, 12 or 14
 }
 
 void loop() {
+  if (KET1_Triggered_Flag == true) {
+    delay(300);
+
+    KET1_Triggered_Flag = false;
+
+    Serial.println("KEY1_Triggered");
+
+    Temp = !Temp;
+  }
+
   // 2. Sensor-Messung (alle 60 Sekunden)
   static unsigned long lastSensorMillis = -60000;
   unsigned long currentMillis = millis();
@@ -299,6 +329,35 @@ void loop() {
 
       // SPI nach Display-Refresh wieder schlafen legen, um LoRa nicht zu stören
       Custom_SPI_0.end();
+    }
+
+    // show battery measurement results
+    if (Temp == false) {
+      digitalWrite(LED_1, HIGH);
+
+      digitalWrite(BATTERY_MEASUREMENT_CONTROL, LOW);  // Turn off battery voltage measurement
+      Serial.print("Turn off battery voltage measurement\n");
+    } else {
+      digitalWrite(LED_1, LOW);
+
+      digitalWrite(BATTERY_MEASUREMENT_CONTROL, HIGH);  // Enable battery voltage measurement
+      Serial.print("Turn on battery voltage measurement\n");
+    }
+    uint32_t adc = analogRead(BATTERY_ADC_DATA);
+    Serial.print("ADC Value: ");
+    Serial.println(adc);
+
+    Serial.printf("ADC Voltage: %.03f V\n", ((float)adc * ((3000.0 / 4096.0))) / 1000.0);
+
+    Serial.printf("Battery Voltage: %.03f V\n", (((float)adc * ((3000.0 / 4096.0))) / 1000.0) * 2.0);
+    Serial.println();
+
+    if (adc > 0) {
+      display.setFont(&FreeSans9pt7b);
+      display.setTextSize(1);
+      display.setCursor(5, 160);
+      display.printf("Battery: %.03f V", (((float)adc * ((3000.0 / 4096.0))) / 1000.0) * 2.0);
+      display.display();
     }
   }
 }
