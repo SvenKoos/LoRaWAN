@@ -1,9 +1,24 @@
 #include <Arduino.h>
+#include <lmic.h>
+#include <hal/hal.h>
+#include <CayenneLPP.h>
 #include "Adafruit_EPD.h"
 #include "RadioLib.h"
 #include "t_echo_lite_config.h"
 #include "Display_Fonts.h"
 #include "Adafruit_SHT31.h"  // Bibliothek hinzufügen
+#include "ttn_config.h"
+
+const lmic_pinmap lmic_pins = {
+  .nss = SX1262_CS,
+  .rxtx = LMIC_UNUSED_PIN,  // Nicht belegt, das VC1/VC2-Switching übernimmt dein Code
+  .rst = SX1262_RST,
+  .dio = { SX1262_DIO1, SX1262_DIO1, LMIC_UNUSED_PIN },  // DIO1 dient als Interrupt für beide DIO-Anschlüsse
+};
+
+// Globale oder static Variablen für die Entprellung
+static unsigned long lastDebounceTime = 0;
+const unsigned long debounceDelay = 250;  // Entprellzeit in Millisekunden
 
 static const uint32_t Local_MAC[2] = {
   NRF_FICR->DEVICEID[0],
@@ -101,6 +116,12 @@ void Set_SX1262_RF_Transmitter_Switch(bool status) {
     digitalWrite(SX1262_RF_VC1, LOW);  // receive
     digitalWrite(SX1262_RF_VC2, HIGH);
   }
+}
+
+// Dieser Callback wird von der MCCI LMIC Library intern aufgerufen
+void hal_pin_rxtx(u1_t val) {
+  // val == 1 bedeutet Senden, val == 0 bedeutet Empfangen
+  Set_SX1262_RF_Transmitter_Switch(val == 1);
 }
 
 bool SX1262_Set_Default_Parameters(String *assertion) {
@@ -249,7 +270,7 @@ void setup(void) {
   display.begin();
   display.setRotation(1);
   display.setTextColor(EPD_BLACK);
-
+  /*/
   GFX_Print_SX1262_Info();
   if (SX1262_Initialization() == true) {
     GFX_Print_SX1262_Init_Successful_Refresh_Info();
@@ -259,7 +280,7 @@ void setup(void) {
     SX1262_OP.initialization_flag = false;
   }
   display.display();
-
+*/
   // 2. I2C-Pins festlegen UND den Bus starten
   delay(100);
   Wire.setPins(35, 36);
@@ -284,20 +305,57 @@ void setup(void) {
   analogReference(AR_INTERNAL_3_0);
   // Set the resolution to 12-bit (0..4095)
   analogReadResolution(12);  // Can be 8, 10, 12 or 14
+
+  // Hier initialisieren wir den Stack mit deinem Pin-Mapping
+  os_init_ex(&lmic_pins);
+  LMIC_reset();
+  // Start join
+  LMIC_startJoining();
+}
+
+static osjob_t sendjob;
+
+void do_send(osjob_t *j, float temperature, float humidity) {
+  // Falls wir noch nicht gejoined sind, gar nicht erst versuchen
+  if (LMIC.devaddr == 0) {
+    Serial.println("Noch nicht gejoined, verschiebe Senden...");
+    return;
+  }
+
+  // Vorbereiten der Cayenne Daten
+  CayenneLPP lpp(51);  // 51 Byte Buffer
+  lpp.reset();
+  lpp.addTemperature(1, temperature);
+  lpp.addRelativeHumidity(2, humidity);
+
+  // Senden
+  LMIC_setTxData2(1, lpp.getBuffer(), lpp.getSize(), 0);
+  Serial.println("Cayenne Daten in Warteschlange.");
 }
 
 void loop() {
+  // 1. Lass den LoRaWAN-Stack arbeiten (kümmert sich um Empfang & Senden)
+  os_runloop_once();
+
+  // Taste entprellen und verarbeiten
+  // Wir schauen, ob das Flag gesetzt wurde (durch deinen Interrupt)
   if (KET1_Triggered_Flag == true) {
-    delay(300);
+    // Prüfen, ob die Zeit seit dem letzten Druck lang genug ist
+    if ((millis() - lastDebounceTime) > debounceDelay) {
 
+      // Hier kommt deine eigentliche Logik rein
+      Serial.println("KEY1_Triggered (entprellt)");
+      Temp = !Temp;
+
+      // Zeitstempel aktualisieren
+      lastDebounceTime = millis();
+    }
+
+    // Flag wieder zurücksetzen
     KET1_Triggered_Flag = false;
-
-    Serial.println("KEY1_Triggered");
-
-    Temp = !Temp;
   }
 
-  // 2. Sensor-Messung (alle 60 Sekunden)
+  // Sensor-Messung (alle 60 Sekunden)
   static unsigned long lastSensorMillis = -60000;
   unsigned long currentMillis = millis();
   if (currentMillis - lastSensorMillis >= 60000) {
@@ -333,12 +391,12 @@ void loop() {
 
     // show battery measurement results
     if (Temp == false) {
-      digitalWrite(LED_1, HIGH);
+      digitalWrite(LED_2, HIGH);
 
       digitalWrite(BATTERY_MEASUREMENT_CONTROL, LOW);  // Turn off battery voltage measurement
       Serial.print("Turn off battery voltage measurement\n");
     } else {
-      digitalWrite(LED_1, LOW);
+      digitalWrite(LED_2, LOW);
 
       digitalWrite(BATTERY_MEASUREMENT_CONTROL, HIGH);  // Enable battery voltage measurement
       Serial.print("Turn on battery voltage measurement\n");
@@ -359,5 +417,47 @@ void loop() {
       display.printf("Battery: %.03f V", (((float)adc * ((3000.0 / 4096.0))) / 1000.0) * 2.0);
       display.display();
     }
+
+    // Senden nur, wenn wir gejoined sind!
+    if (LMIC.devaddr != 0) {
+      do_send(&sendjob, t, h);
+    } else {
+      Serial.println("Warte auf Join...");
+    }
   }
+}
+
+void onEvent(ev_t ev) {
+  switch (ev) {
+    case EV_SCAN_TIMEOUT: Serial.println("EV_SCAN_TIMEOUT"); break;
+    case EV_BEACON_FOUND: Serial.println("EV_BEACON_FOUND"); break;
+    case EV_BEACON_MISSED: Serial.println("EV_BEACON_MISSED"); break;
+    case EV_BEACON_TRACKED: Serial.println("EV_BEACON_TRACKED"); break;
+    case EV_JOINING: Serial.println("EV_JOINING: Verbindungsaufbau..."); break;
+    case EV_JOINED: Serial.println("EV_JOINED: Erfolgreich mit TTN verbunden!"); break;
+    case EV_RFU1: Serial.println("EV_RFU1"); break;
+    case EV_JOIN_FAILED: Serial.println("EV_JOIN_FAILED: Join fehlgeschlagen!"); break;
+    case EV_REJOIN_FAILED: Serial.println("EV_REJOIN_FAILED: Rejoin fehlgeschlagen!"); break;
+    case EV_TXCOMPLETE: Serial.println("EV_TXCOMPLETE: Senden beendet."); break;
+    case EV_LOST_TSYNC: Serial.println("EV_LOST_TSYNC"); break;
+    case EV_RESET: Serial.println("EV_RESET"); break;
+    case EV_RXCOMPLETE: Serial.println("EV_RXCOMPLETE"); break;
+    case EV_LINK_DEAD: Serial.println("EV_LINK_DEAD"); break;
+    case EV_LINK_ALIVE: Serial.println("EV_LINK_ALIVE"); break;
+    default:
+      Serial.print("Unknown event: ");
+      Serial.println(ev);
+      break;
+  }
+}
+
+// Schlüssel aus der ttn_config.h bereitstellen
+void os_getArtEui(u1_t *buf) {
+  memcpy_P(buf, APPEUI, 8);
+}
+void os_getDevEui(u1_t *buf) {
+  memcpy_P(buf, DEVEUI, 8);
+}
+void os_getDevKey(u1_t *buf) {
+  memcpy_P(buf, APPKEY, 16);
 }
