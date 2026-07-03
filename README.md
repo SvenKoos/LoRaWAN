@@ -54,6 +54,10 @@ LoRaWAN implementation with temperature and humidity sensor / display based on L
 ## 5. Get TTN application keys
 - register application with TTN (outdated)
   - [RAK7246G LoRaWAN Network Server Guide](https://docs.rakwireless.com/product-categories/wisgate/rak7246g/lorawan-network-server-guide)
+- create a custom end device in TTN console
+  - JoinEUI: enter 00 00 00 00 00 00 00 00
+  - DevEUI: use generate button to create new device ID
+  - AppKey: use generate button to create new application key
 
 ## 6. Send measurements to TTN
 - use RadioLib in LoRaWAN mode

@@ -1,95 +1,17 @@
 #include <Arduino.h>
-#include <lmic.h>
-#include <hal/hal.h>
-#include <CayenneLPP.h>
 #include "Adafruit_EPD.h"
 #include "RadioLib.h"
+#include <protocols/LoRaWAN/LoRaWAN.h>
 #include "t_echo_lite_config.h"
 #include "Display_Fonts.h"
-#include "Adafruit_SHT31.h"  // Bibliothek hinzufügen
+#include "Adafruit_SHT31.h"
+
 #include "ttn_config.h"
-
-const lmic_pinmap lmic_pins = {
-  .nss = SX1262_CS,
-  .rxtx = LMIC_UNUSED_PIN,  // Nicht belegt, das VC1/VC2-Switching übernimmt dein Code
-  .rst = SX1262_RST,
-  .dio = { SX1262_DIO1, SX1262_DIO1, LMIC_UNUSED_PIN },  // DIO1 dient als Interrupt für beide DIO-Anschlüsse
-};
-
-// Globale oder static Variablen für die Entprellung
-static unsigned long lastDebounceTime = 0;
-const unsigned long debounceDelay = 250;  // Entprellzeit in Millisekunden
 
 static const uint32_t Local_MAC[2] = {
   NRF_FICR->DEVICEID[0],
   NRF_FICR->DEVICEID[1],
 };
-
-struct SX1262_Operator {
-  using mode = enum {
-    LORA,  // lora mode
-    FSK,   // fsk mode
-  };
-
-  // aligned with T-Watch
-  struct
-  {
-    float value = 868.1;
-    bool change_flag = false;
-  } frequency;
-  struct
-  {
-    float value = 125.0;
-    bool change_flag = false;
-  } bandwidth;
-  struct
-  {
-    // uint8_t value = 12;
-    uint8_t value = 9;
-    bool change_flag = false;
-  } spreading_factor;
-  struct
-  {
-    // uint8_t value = 8;
-    uint8_t value = 7;
-    bool change_flag = false;
-  } coding_rate;
-  struct
-  {
-    // uint8_t value = 0xAB;
-    uint8_t value = 0x12;
-    bool change_flag = false;
-  } sync_word;
-  struct
-  {
-    // int8_t value = 22;
-    int8_t value = 13;
-    bool change_flag = false;
-  } output_power;
-  struct
-  {
-    // float value = 140;
-    float value = 60;
-    bool change_flag = false;
-  } current_limit;
-  struct
-  {
-    // int16_t value = 16;
-    int16_t value = 8;
-    bool change_flag = false;
-  } preamble_length;
-  struct
-  {
-    bool value = false;
-    bool change_flag = false;
-  } crc;
-
-  uint8_t current_mode = mode::LORA;
-
-  bool initialization_flag = false;
-};
-
-SX1262_Operator SX1262_OP;
 
 SPIClass Custom_SPI_0(NRF_SPIM0, SCREEN_MISO, SCREEN_SCLK, SCREEN_MOSI);
 Adafruit_SSD1681 display(SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_DC, SCREEN_RST,
@@ -104,145 +26,113 @@ Adafruit_SHT31 sht31 = Adafruit_SHT31();  // Globales Objekt
 bool Temp = false;
 volatile bool KET1_Triggered_Flag = false;
 
+// LoRaWAN-Instanz - sie nutzt das existierende radio-Objekt
+// create the LoRaWAN node
+LoRaWANNode loraWAN(&radio, &Region, subBand);
+
+bool ttn_joined = false;
+bool loRaWAN_started = false;
+
 void External_Interrupt_Triggered() {
   KET1_Triggered_Flag = true;
 }
 
-void Set_SX1262_RF_Transmitter_Switch(bool status) {
-  if (status == true) {
-    digitalWrite(SX1262_RF_VC1, HIGH);  // send
+void setRfSwitchState(uint8_t state) {
+  Serial.println("Switch TX");
+  // state 0 = RX, state 1 = TX
+  if (state == 1) {  // TX
+    digitalWrite(SX1262_RF_VC1, HIGH);
     digitalWrite(SX1262_RF_VC2, LOW);
-  } else {
-    digitalWrite(SX1262_RF_VC1, LOW);  // receive
+  } else {  // RX
+    digitalWrite(SX1262_RF_VC1, LOW);
     digitalWrite(SX1262_RF_VC2, HIGH);
   }
 }
 
-// Dieser Callback wird von der MCCI LMIC Library intern aufgerufen
-void hal_pin_rxtx(u1_t val) {
-  // val == 1 bedeutet Senden, val == 0 bedeutet Empfangen
-  Set_SX1262_RF_Transmitter_Switch(val == 1);
-}
+void Start_TTN_Join() {
+  Serial.println("Initialisiere Radio-Hardware...");
 
-bool SX1262_Set_Default_Parameters(String *assertion) {
-  if (radio.setFrequency(SX1262_OP.frequency.value) != RADIOLIB_ERR_NONE) {
-    *assertion = "Failed to set frequency value";
-    return false;
-  }
-  if (radio.setBandwidth(SX1262_OP.bandwidth.value) != RADIOLIB_ERR_NONE) {
-    *assertion = "Failed to set bandwidth value";
-    return false;
-  }
-  if (radio.setOutputPower(SX1262_OP.output_power.value) != RADIOLIB_ERR_NONE) {
-    *assertion = "Failed to set output_power value";
-    return false;
-  }
-  if (radio.setCurrentLimit(SX1262_OP.current_limit.value) != RADIOLIB_ERR_NONE) {
-    *assertion = "Failed to set current_limit value";
-    return false;
-  }
-  if (radio.setPreambleLength(SX1262_OP.preamble_length.value) != RADIOLIB_ERR_NONE) {
-    *assertion = "Failed to set preamble_length value";
-    return false;
-  }
-  if (radio.setCRC(SX1262_OP.crc.value) != RADIOLIB_ERR_NONE) {
-    *assertion = "Failed to set crc value";
-    return false;
-  }
-  if (SX1262_OP.current_mode == SX1262_OP.mode::LORA) {
-    if (radio.setSpreadingFactor(SX1262_OP.spreading_factor.value) != RADIOLIB_ERR_NONE) {
-      *assertion = "Failed to set spreading_factor value";
-      return false;
-    }
-    if (radio.setCodingRate(SX1262_OP.coding_rate.value) != RADIOLIB_ERR_NONE) {
-      *assertion = "Failed to set coding_rate value";
-      return false;
-    }
-    if (radio.setSyncWord(SX1262_OP.sync_word.value) != RADIOLIB_ERR_NONE) {
-      *assertion = "Failed to set sync_word value";
-      return false;
-    }
-  } else {
-  }
-  return true;
-}
+  // 1. Alle SPI-Pins auf INPUT_PULLUP setzen (Sicherer Zustand für nRF52 Bus)
+  pinMode(SX1262_SCLK, INPUT_PULLUP);
+  pinMode(SX1262_MISO, INPUT_PULLUP);
+  pinMode(SX1262_MOSI, INPUT_PULLUP);
 
-void GFX_Print_SX1262_Info(void) {
-  display.fillScreen(EPD_WHITE);
+  // 2. Hardware-Reset (Der "P2P-Wachmacher")
+  pinMode(SX1262_RST, OUTPUT);
+  digitalWrite(SX1262_RST, LOW);
+  delay(50);  // Länger als P2P, um sicher zu gehen
+  digitalWrite(SX1262_RST, HIGH);
+  delay(100);
 
-  display.setFont(&FreeMonoBold9pt7b);
-  display.setCursor(5, 20);
-  display.setTextSize(1);
-
-  display.printf("SX1262 Info");
-
-  display.setFont(&FreeSans9pt7b);
-
-  display.setCursor(5, 40);
-  display.printf("MAC 0: %u", Local_MAC[0]);
-  display.setCursor(5, 60);
-  display.printf("MAC 1: %u", Local_MAC[1]);
-}
-
-void GFX_Print_SX1262_Init_Successful_Refresh_Info(void) {
-  display.setTextSize(1);
-  display.setCursor(5, 80);
-  display.printf("Status: Init successful");
-
-  display.setCursor(5, 100);
-  if (SX1262_OP.current_mode == SX1262_OP.mode::LORA) {
-    display.printf("Mode: LoRa");
-  } else {
-    display.printf("Mode: FSK");
-  }
-
-  display.setCursor(5, 120);
-  display.printf("Frequency: %.1f MHz", SX1262_OP.frequency.value);
-
-  display.setCursor(5, 140);
-  display.printf("Bandwidth: %.1f KHz", SX1262_OP.bandwidth.value);
-
-  display.setCursor(5, 160);
-  display.printf("Output Power: %d dBm", SX1262_OP.output_power.value);
-}
-
-void GFX_Print_SX1262_Init_Failed_Refresh_Info(void) {
-  display.setTextSize(1);
-  display.setCursor(5, 80);
-  display.printf("Status: Init failed");
-}
-
-bool SX1262_Initialization(void) {
+  // 3. SPI neu starten
   Custom_SPI_3.begin();
-  Custom_SPI_3.setClockDivider(SPI_CLOCK_DIV2);
 
-  int16_t state = -1;
-  if (SX1262_OP.current_mode == SX1262_OP.mode::LORA) {
-    state = radio.begin();
-  } else {
-    state = radio.beginFSK();
+  // 1. Definiere die beteiligten Pins
+  // Wir nutzen VC1 und VC2. RadioLib erwartet ein Array der Größe RFSWITCH_MAX_PINS (meist 5, wir füllen den Rest mit 0)
+  uint32_t pins[] = { SX1262_RF_VC1, SX1262_RF_VC2, 0, 0, 0 };
+
+  // 2. Definiere die Zustände (Logic Table)
+  // Jeder Eintrag entspricht einem Modus:
+  // [RX, TX_RFO, TX_PA]
+  // Für jeden Pin definieren wir den Pegel (1=HIGH, 0=LOW)
+  // VC1=HIGH(1)/LOW(0), VC2=LOW(0)/HIGH(1)
+  // RX: VC1=LOW, VC2=HIGH  => {0, 1}
+  // TX: VC1=HIGH, VC2=LOW  => {1, 0}
+
+  Module::RfSwitchMode_t table[] = {
+    { 0, 1 },  // RX Mode: VC1=0, VC2=1
+    { 1, 0 },  // TX RFO Mode: VC1=1, VC2=0
+    { 1, 0 }   // TX PA Mode: VC1=1, VC2=0
+  };
+
+  // 3. Übergabe an das Radio
+  radio.setRfSwitchTable(pins, table);
+  Serial.println("Radio Switch registered!");
+
+  // Teste, ob das Radio den Befehl angenommen hat
+  // Ein einfacher Pin-Toggle zur Bestätigung:
+  digitalWrite(SX1262_RF_VC1, HIGH);
+  delay(100);
+  digitalWrite(SX1262_RF_VC1, LOW);
+  Serial.println("Switch Pins wurden kurz getoggelt!");
+
+  // 4. Radio init
+  ConfigLoRa_t config;
+  config.frequency = 868;  // The frequency here does not matter, as it will get changed by LoRaWAN anyway
+  radio.tcxoVoltage = 1.6; // Some radio modules like SX126x often come with TCXO
+  int16_t state = radio.begin(config);
+
+  if (state != RADIOLIB_ERR_NONE) {
+    Serial.printf("Fehler Code: %d\n", state);
+    return;
   }
 
+  Serial.println("Radio init success!");
+
+  // ... OTAA Start ...
+
+  // 4. LoRaWAN starten
+  state = loraWAN.beginOTAA(joinEUI, devEUI, nwkKey, appKey);
   if (state == RADIOLIB_ERR_NONE) {
-    String temp_str;
-    if (SX1262_Set_Default_Parameters(&temp_str) == false) {
-      Serial.printf("SX1262 Failed to set default parameters\n");
-      Serial.printf("SX1262 assertion: %s\n", temp_str.c_str());
-      return false;
-    }
-    if (radio.startReceive() != RADIOLIB_ERR_NONE) {
-      Serial.printf("SX1262 Failed to start receive\n");
-      return false;
-    }
+    Serial.println("OTAA Start OK, verbinde...");
+
+    // Override the default join rate
+    loraWAN.setDatarate(4);
+
+    state = loraWAN.activateOTAA();
+    Serial.printf("activateOTAA: %d\n", state);
+
+    // Print the DevAddr
+    Serial.print("[LoRaWAN] DevAddr: ");
+    Serial.println((unsigned long)loraWAN.getDevAddr(), HEX);
+
+    // Set a datarate to start off with
+    loraWAN.setDatarate(5);
+
+    loRaWAN_started = true;  // Flag setzen, damit wir nicht nochmal neu initialisieren
   } else {
-    Serial.printf("SX1262 initialization failed\n");
-    Serial.printf("Error code: %d\n", state);
-    return false;
+    Serial.printf("Fehler bei beginOTAA: %d\n", state);
   }
-
-  Serial.printf("SX1262 initialization successful\n");
-
-  return true;
 }
 
 void setup(void) {
@@ -258,9 +148,6 @@ void setup(void) {
   pinMode(SX1262_RF_VC1, OUTPUT);
   pinMode(SX1262_RF_VC2, OUTPUT);
 
-  // receive
-  Set_SX1262_RF_Transmitter_Switch(false);
-
   pinMode(nRF52840_BOOT, INPUT_PULLUP);
   pinMode(LED_1, OUTPUT);
   pinMode(LED_2, OUTPUT);
@@ -270,17 +157,8 @@ void setup(void) {
   display.begin();
   display.setRotation(1);
   display.setTextColor(EPD_BLACK);
-  /*/
-  GFX_Print_SX1262_Info();
-  if (SX1262_Initialization() == true) {
-    GFX_Print_SX1262_Init_Successful_Refresh_Info();
-    SX1262_OP.initialization_flag = true;
-  } else {
-    GFX_Print_SX1262_Init_Failed_Refresh_Info();
-    SX1262_OP.initialization_flag = false;
-  }
   display.display();
-*/
+
   // 2. I2C-Pins festlegen UND den Bus starten
   delay(100);
   Wire.setPins(35, 36);
@@ -305,57 +183,26 @@ void setup(void) {
   analogReference(AR_INTERNAL_3_0);
   // Set the resolution to 12-bit (0..4095)
   analogReadResolution(12);  // Can be 8, 10, 12 or 14
-
-  // Hier initialisieren wir den Stack mit deinem Pin-Mapping
-  os_init_ex(&lmic_pins);
-  LMIC_reset();
-  // Start join
-  LMIC_startJoining();
-}
-
-static osjob_t sendjob;
-
-void do_send(osjob_t *j, float temperature, float humidity) {
-  // Falls wir noch nicht gejoined sind, gar nicht erst versuchen
-  if (LMIC.devaddr == 0) {
-    Serial.println("Noch nicht gejoined, verschiebe Senden...");
-    return;
-  }
-
-  // Vorbereiten der Cayenne Daten
-  CayenneLPP lpp(51);  // 51 Byte Buffer
-  lpp.reset();
-  lpp.addTemperature(1, temperature);
-  lpp.addRelativeHumidity(2, humidity);
-
-  // Senden
-  LMIC_setTxData2(1, lpp.getBuffer(), lpp.getSize(), 0);
-  Serial.println("Cayenne Daten in Warteschlange.");
 }
 
 void loop() {
-  // 1. Lass den LoRaWAN-Stack arbeiten (kümmert sich um Empfang & Senden)
-  os_runloop_once();
-
-  // Taste entprellen und verarbeiten
-  // Wir schauen, ob das Flag gesetzt wurde (durch deinen Interrupt)
-  if (KET1_Triggered_Flag == true) {
-    // Prüfen, ob die Zeit seit dem letzten Druck lang genug ist
-    if ((millis() - lastDebounceTime) > debounceDelay) {
-
-      // Hier kommt deine eigentliche Logik rein
-      Serial.println("KEY1_Triggered (entprellt)");
-      Temp = !Temp;
-
-      // Zeitstempel aktualisieren
-      lastDebounceTime = millis();
-    }
-
-    // Flag wieder zurücksetzen
-    KET1_Triggered_Flag = false;
+  if (!loRaWAN_started) {
+    delay(2000);  // Gib dem nRF52 2 Sekunden Zeit nach dem Boot
+    Serial.println("Starte LoRaWAN-Join jetzt...");
+    Start_TTN_Join();
   }
 
-  // Sensor-Messung (alle 60 Sekunden)
+  if (KET1_Triggered_Flag == true) {
+    delay(300);
+
+    KET1_Triggered_Flag = false;
+
+    Serial.println("KEY1_Triggered");
+
+    Temp = !Temp;
+  }
+
+  // 2. Sensor-Messung (alle 60 Sekunden)
   static unsigned long lastSensorMillis = -60000;
   unsigned long currentMillis = millis();
   if (currentMillis - lastSensorMillis >= 60000) {
@@ -391,73 +238,30 @@ void loop() {
 
     // show battery measurement results
     if (Temp == false) {
-      digitalWrite(LED_2, HIGH);
+      digitalWrite(LED_1, HIGH);
 
       digitalWrite(BATTERY_MEASUREMENT_CONTROL, LOW);  // Turn off battery voltage measurement
       Serial.print("Turn off battery voltage measurement\n");
     } else {
-      digitalWrite(LED_2, LOW);
+      digitalWrite(LED_1, LOW);
 
       digitalWrite(BATTERY_MEASUREMENT_CONTROL, HIGH);  // Enable battery voltage measurement
       Serial.print("Turn on battery voltage measurement\n");
     }
+
     uint32_t adc = analogRead(BATTERY_ADC_DATA);
-    Serial.print("ADC Value: ");
-    Serial.println(adc);
-
-    Serial.printf("ADC Voltage: %.03f V\n", ((float)adc * ((3000.0 / 4096.0))) / 1000.0);
-
-    Serial.printf("Battery Voltage: %.03f V\n", (((float)adc * ((3000.0 / 4096.0))) / 1000.0) * 2.0);
-    Serial.println();
-
     if (adc > 0) {
+      Serial.print("ADC Value: ");
+      Serial.println(adc);
+      Serial.printf("ADC Voltage: %.03f V\n", ((float)adc * ((3000.0 / 4096.0))) / 1000.0);
+      Serial.printf("Battery Voltage: %.03f V\n", (((float)adc * ((3000.0 / 4096.0))) / 1000.0) * 2.0);
+      Serial.println();
+
       display.setFont(&FreeSans9pt7b);
       display.setTextSize(1);
       display.setCursor(5, 160);
       display.printf("Battery: %.03f V", (((float)adc * ((3000.0 / 4096.0))) / 1000.0) * 2.0);
       display.display();
     }
-
-    // Senden nur, wenn wir gejoined sind!
-    if (LMIC.devaddr != 0) {
-      do_send(&sendjob, t, h);
-    } else {
-      Serial.println("Warte auf Join...");
-    }
   }
-}
-
-void onEvent(ev_t ev) {
-  switch (ev) {
-    case EV_SCAN_TIMEOUT: Serial.println("EV_SCAN_TIMEOUT"); break;
-    case EV_BEACON_FOUND: Serial.println("EV_BEACON_FOUND"); break;
-    case EV_BEACON_MISSED: Serial.println("EV_BEACON_MISSED"); break;
-    case EV_BEACON_TRACKED: Serial.println("EV_BEACON_TRACKED"); break;
-    case EV_JOINING: Serial.println("EV_JOINING: Verbindungsaufbau..."); break;
-    case EV_JOINED: Serial.println("EV_JOINED: Erfolgreich mit TTN verbunden!"); break;
-    case EV_RFU1: Serial.println("EV_RFU1"); break;
-    case EV_JOIN_FAILED: Serial.println("EV_JOIN_FAILED: Join fehlgeschlagen!"); break;
-    case EV_REJOIN_FAILED: Serial.println("EV_REJOIN_FAILED: Rejoin fehlgeschlagen!"); break;
-    case EV_TXCOMPLETE: Serial.println("EV_TXCOMPLETE: Senden beendet."); break;
-    case EV_LOST_TSYNC: Serial.println("EV_LOST_TSYNC"); break;
-    case EV_RESET: Serial.println("EV_RESET"); break;
-    case EV_RXCOMPLETE: Serial.println("EV_RXCOMPLETE"); break;
-    case EV_LINK_DEAD: Serial.println("EV_LINK_DEAD"); break;
-    case EV_LINK_ALIVE: Serial.println("EV_LINK_ALIVE"); break;
-    default:
-      Serial.print("Unknown event: ");
-      Serial.println(ev);
-      break;
-  }
-}
-
-// Schlüssel aus der ttn_config.h bereitstellen
-void os_getArtEui(u1_t *buf) {
-  memcpy_P(buf, APPEUI, 8);
-}
-void os_getDevEui(u1_t *buf) {
-  memcpy_P(buf, DEVEUI, 8);
-}
-void os_getDevKey(u1_t *buf) {
-  memcpy_P(buf, APPKEY, 16);
 }
