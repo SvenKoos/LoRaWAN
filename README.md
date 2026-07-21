@@ -4,9 +4,9 @@ LoRaWAN implementation with temperature and humidity sensor / display based on L
 ## Project plan
 1. connect temperature / humidity sensor SHT31 to T-Echo Lite ==> achieved
 2. show the measurements on the display  of T-Echo Lite ==> achieved
-3. configure the gateway and register it with TTN
-4. create application in TTN and get the TTN keys
-5. extend the code on T-Echo Lite about LoRaWAN implementation (sensor authentication, measurement upload)
+3. configure the gateway and register it with TTN ==> achieved
+4. create application in TTN and get the TTN keys for the end device ==> achieved
+5. extend the code on T-Echo Lite about LoRaWAN implementation (device activation, measurement upload) ==> achieved
 
 ## 1. Connect sensor to T-Echo
 - connect SHT31 to T-Echo Lite using the following pins
@@ -25,9 +25,10 @@ LoRaWAN implementation with temperature and humidity sensor / display based on L
 - configure gateway network, internet access, LoRa band, TTN network
 ### RAK7246G:
   - [RAK7246G Quick Start Guide](https://docs.rakwireless.com/product-categories/wisgate/rak7246g/quickstart)
-  - verify / change the TTN server name to new TTN V3 name (assuming EU1 selected in gateway setup in TTN): eu1.cloud.thethings.network
+  - verify / change the TTN server name to new TTN V3 name (assuming EU1 selected in gateway setup in TTN; check the gateway configuration in general settings in TTN console; s. chapter Register gateway in TTN): ask-it.eu1.cloud.thethings.network
   - enable and restart LoRa services (assuming service name ttn-gateway): sudo systemctl enable ttn-gateway | sudo systemctl start ttn-gateway | sudo systemctl status ttn-gateway
   - verify communication of the gateway with TTN: sudo journalctl -u ttn-gateway -f 
+  - verify gateway connectivity status in TTN console (should be Connected)
 ### RAK5146 PiHAT Kit for LoRaWAN and Concentrator (SPI model)
   - [1. RAK5146 Setup with LoRa Basic Station](https://lora.vsb.cz/index.php/433-868-mhz-rak5146l-rak5146-lora-basics-station/)
   - [2. Setting Up a LoRa Gateway with Raspberry Pi and RAK5146](https://medium.com/@techworldthink/setting-up-a-lora-gateway-with-raspberry-pi-and-rak5146-f1af49a84ff7)
@@ -41,26 +42,28 @@ LoRaWAN implementation with temperature and humidity sensor / display based on L
   - Configure the Gateway for TTN acc. 2. and 4.
   - verify / change connection to TTN server as for RAK7246G
 
-## 4. Register in TTN
+## 4. Register gateway in TTN
 - register the gateway with TTN (outdated, still helpful)
   - [RAK7246G LoRaWAN Network Server Guide](https://docs.rakwireless.com/product-categories/wisgate/rak7246g/lorawan-network-server-guide)
 
 - create organization and application in TTN (outdated, still helpful)
   - [Setup LoRaWAN Network in TTN](https://docs.rakwireless.com/product-categories/wisgate/rak7246g/lorawan-network-server-guide)
 
-- register gateway in TTNS
+- register gateway in TTNS (helpful, but related to )
   - [Setup LoRaWAN gateway on TTN Gateway Pro](https://www.thethingsindustries.com/docs/getting-started/3-try-starter-kit/)
+    - for RAK LoRa gateway: ensure disabling authenticated connection
 
 ## 5. Get TTN application keys
-- register application with TTN (outdated)
+- register application with TTN (outdated, still helpful)
   - [RAK7246G LoRaWAN Network Server Guide](https://docs.rakwireless.com/product-categories/wisgate/rak7246g/lorawan-network-server-guide)
-- create a custom end device in TTN console
+- create a custom end device in TTN console (application section)
   - JoinEUI: enter 00 00 00 00 00 00 00 00
   - DevEUI: use generate button to create new device ID
   - AppKey: use generate button to create new application key
 
 ## 6. Send measurements to TTN
 - use RadioLib in LoRaWAN mode
-  - implement OTAA (over the air activation) of the sensor / T-Echo
-  - create the LoRaWAN payload for measurement data with CayenneLPP
+  - implement OTAA (over the air activation) of the T-Echo
+    - using the JoinEUI, DevEUI, AppKey, NwkKey (same as AppKey)
 - use CayenneLPP library to create LoRaWAN paylod
+- hint: for development purposes only change the settings of the end device in Join settings: Resets join nonces - Enabled

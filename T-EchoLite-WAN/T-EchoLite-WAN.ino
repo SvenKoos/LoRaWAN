@@ -1,17 +1,12 @@
 #include <Arduino.h>
+#include <CayenneLPP.h>
 #include "Adafruit_EPD.h"
 #include "RadioLib.h"
-#include <protocols/LoRaWAN/LoRaWAN.h>
 #include "t_echo_lite_config.h"
 #include "Display_Fonts.h"
 #include "Adafruit_SHT31.h"
 
 #include "ttn_config.h"
-
-static const uint32_t Local_MAC[2] = {
-  NRF_FICR->DEVICEID[0],
-  NRF_FICR->DEVICEID[1],
-};
 
 SPIClass Custom_SPI_0(NRF_SPIM0, SCREEN_MISO, SCREEN_SCLK, SCREEN_MOSI);
 Adafruit_SSD1681 display(SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_DC, SCREEN_RST,
@@ -32,6 +27,9 @@ LoRaWANNode loraWAN(&radio, &Region, subBand);
 
 bool ttn_joined = false;
 bool loRaWAN_started = false;
+
+// CayenneLPP-Objekt erstellen (51 Bytes Puffer reichen dicke aus)
+CayenneLPP lpp(51);
 
 void External_Interrupt_Triggered() {
   KET1_Triggered_Flag = true;
@@ -98,8 +96,8 @@ void Start_TTN_Join() {
 
   // 4. Radio init
   ConfigLoRa_t config;
-  config.frequency = 868;  // The frequency here does not matter, as it will get changed by LoRaWAN anyway
-  radio.tcxoVoltage = 1.6; // Some radio modules like SX126x often come with TCXO
+  config.frequency = 868;   // The frequency here does not matter, as it will get changed by LoRaWAN anyway
+  radio.tcxoVoltage = 1.6;  // Some radio modules like SX126x often come with TCXO
   int16_t state = radio.begin(config);
 
   if (state != RADIOLIB_ERR_NONE) {
@@ -120,16 +118,19 @@ void Start_TTN_Join() {
     loraWAN.setDatarate(4);
 
     state = loraWAN.activateOTAA();
-    Serial.printf("activateOTAA: %d\n", state);
+    // Prüfe auf ERR_NONE (0) ODER RADIOLIB_LORAWAN_NEW_SESSION (-1118)
+    if (state == RADIOLIB_ERR_NONE || state == RADIOLIB_LORAWAN_NEW_SESSION) {
+      Serial.printf("activateOTAA erfolgreich (Code: %d)\n", state);
 
-    // Print the DevAddr
-    Serial.print("[LoRaWAN] DevAddr: ");
-    Serial.println((unsigned long)loraWAN.getDevAddr(), HEX);
+      Serial.print("[LoRaWAN] DevAddr: ");
+      Serial.println((unsigned long)loraWAN.getDevAddr(), HEX);
 
-    // Set a datarate to start off with
-    loraWAN.setDatarate(5);
-
-    loRaWAN_started = true;  // Flag setzen, damit wir nicht nochmal neu initialisieren
+      loraWAN.setDatarate(5);
+      
+      loRaWAN_started = true;
+    } else {
+      Serial.printf("Fehler bei activateOTAA: %d\n", state);
+    }
   } else {
     Serial.printf("Fehler bei beginOTAA: %d\n", state);
   }
@@ -234,6 +235,28 @@ void loop() {
 
       // SPI nach Display-Refresh wieder schlafen legen, um LoRa nicht zu stören
       Custom_SPI_0.end();
+
+      // LoRa / CayenneLPP sending
+      if (loRaWAN_started) {
+        lpp.reset();
+        // Kanal 1: Temperatur
+        lpp.addTemperature(1, t);
+        // Kanal 2: Rel. Luftfeuchtigkeit
+        lpp.addRelativeHumidity(2, h);
+
+        Serial.println("Sende Uplink an TTN...");
+
+        // Da das SX1262 Radio-Objekt im RadioLib-LoRaWANNode gekapselt ist,
+        // senden wir den Uplink über die loraWAN-Instanz (Port 1)
+        int16_t state = loraWAN.sendReceive(lpp.getBuffer(), lpp.getSize(), 1);
+
+        if (state == RADIOLIB_ERR_NONE) {
+          Serial.println("Uplink erfolgreich gesendet!");
+        } else {
+          Serial.print("Uplink-Fehler: ");
+          Serial.println(state);
+        }
+      }
     }
 
     // show battery measurement results
