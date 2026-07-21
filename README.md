@@ -4,9 +4,11 @@ LoRaWAN implementation with temperature and humidity sensor / display based on L
 ## Project plan
 1. connect temperature / humidity sensor SHT31 to T-Echo Lite ==> achieved
 2. show the measurements on the display  of T-Echo Lite ==> achieved
-3. configure the gateway and register it with TTN ==> achieved
-4. create application in TTN and get the TTN keys for the end device ==> achieved
-5. extend the code on T-Echo Lite about LoRaWAN implementation (device activation, measurement upload) ==> achieved
+3. configure the gateway ==> achieved
+4. register the gateway in TTN  ==> achieved
+5. create application in TTN and get the TTN keys for the end device ==> achieved
+6. extend the code on T-Echo Lite about LoRaWAN implementation (device activation, measurement upload) ==> achieved
+7. Connect an IoT data dashboard to the data in TTN (with Datacake)
 
 ## 1. Connect sensor to T-Echo
 - connect SHT31 to T-Echo Lite using the following pins
@@ -67,3 +69,39 @@ LoRaWAN implementation with temperature and humidity sensor / display based on L
     - using the JoinEUI, DevEUI, AppKey, NwkKey (same as AppKey)
 - use CayenneLPP library to create LoRaWAN paylod
 - hint: for development purposes only change the settings of the end device in Join settings: Resets join nonces - Enabled
+
+## 7. Connect Datacake with TTN to visualize the measurement data
+- create a Datacake account
+- add a new device:
+  - create a new product
+  - select TTN V3 as network server
+  - enter device EUI and ID exactly from TTN
+  - select free data plan
+- change configuration of the new device
+  - product and hardware: 
+    - adapt the payload decoder (hint: use use rawPayload, not payload data)
+  
+function Decoder(bytes, port) {
+    var measurements = [];
+    
+    try {
+        // Bei TTN-Integrationen in Datacake liegen die Webhook-Daten in rawPayload
+        if (typeof rawPayload !== 'undefined' && rawPayload.uplink_message && rawPayload.uplink_message.decoded_payload) {
+            var dec = rawPayload.uplink_message.decoded_payload;
+            
+            if (dec.temperature_1 !== undefined) {
+                measurements.push({ field: "TEMPERATURE", value: dec.temperature_1 });
+            }
+            if (dec.relative_humidity_2 !== undefined) {
+                measurements.push({ field: "HUMIDITY", value: dec.relative_humidity_2 });
+            }
+        }
+    } catch (e) {
+        // Fehler abfangen
+    }
+    
+    return measurements;
+}
+
+  - fields: create TEMPERATURE and HUMIDITY fields with Numeric type and appropriate semantic
+- create dashboards (e.g., chart with two data linesd) using the fields according to needs 
