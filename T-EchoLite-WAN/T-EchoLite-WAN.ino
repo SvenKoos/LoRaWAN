@@ -31,6 +31,18 @@ bool loRaWAN_started = false;
 // CayenneLPP-Objekt erstellen (51 Bytes Puffer reichen dicke aus)
 CayenneLPP lpp(51);
 
+// Zustandsvariablen für die änderungsbasierte Sendung
+float lastSentTemp = -999.0;
+float lastSentHum = -999.0;
+
+// Heartbeat
+unsigned long lastHeartbeatMillis = 0;
+const unsigned long HEARTBEAT_INTERVAL = 30UL * 60UL * 1000UL;  // 30 Minuten Heartbeat
+
+// thtreshold based sending
+const float TEMP_THRESHOLD = 0.2;  // Abweichung in °C
+const float HUM_THRESHOLD = 1.0;   // Abweichung in %
+
 void External_Interrupt_Triggered() {
   KET1_Triggered_Flag = true;
 }
@@ -126,7 +138,7 @@ void Start_TTN_Join() {
       Serial.println((unsigned long)loraWAN.getDevAddr(), HEX);
 
       loraWAN.setDatarate(5);
-      
+
       loRaWAN_started = true;
     } else {
       Serial.printf("Fehler bei activateOTAA: %d\n", state);
@@ -204,9 +216,9 @@ void loop() {
   }
 
   // 2. Sensor-Messung (alle 2*60 Sekunden)
-  static unsigned long lastSensorMillis = -2*60000;
+  static unsigned long lastSensorMillis = -2 * 60000;
   unsigned long currentMillis = millis();
-  if (currentMillis - lastSensorMillis >= 2*60000) {
+  if (currentMillis - lastSensorMillis >= 2 * 60000) {
     lastSensorMillis = currentMillis;
 
     // 1. I2C Bus aktiv für die Messung vorbereiten
@@ -238,24 +250,37 @@ void loop() {
 
       // LoRa / CayenneLPP sending
       if (loRaWAN_started) {
-        lpp.reset();
-        // Kanal 1: Temperatur
-        lpp.addTemperature(1, t);
-        // Kanal 2: Rel. Luftfeuchtigkeit
-        lpp.addRelativeHumidity(2, h);
+        bool sendReasonTempChange = (abs(t - lastSentTemp) >= TEMP_THRESHOLD);
+        bool sendReasonHumChange = (abs(h - lastSentHum) >= HUM_THRESHOLD);
+        bool sendReasonHeartbeat = (currentMillis - lastHeartbeatMillis >= HEARTBEAT_INTERVAL);
 
-        Serial.println("Sende Uplink an TTN...");
+        // Wenn sich genug geändert hat, ein Heartbeat fällig ist ODER der Button gedrückt wurde:
+        if (sendReasonTempChange || sendReasonHumChange || sendReasonHeartbeat) {
 
-        // Da das SX1262 Radio-Objekt im RadioLib-LoRaWANNode gekapselt ist,
-        // senden wir den Uplink über die loraWAN-Instanz (Port 1)
-        int16_t state = loraWAN.sendReceive(lpp.getBuffer(), lpp.getSize(), 1);
+          lpp.reset();
+          // Kanal 1: Temperatur
+          lpp.addTemperature(1, t);
+          // Kanal 2: Rel. Luftfeuchtigkeit
+          lpp.addRelativeHumidity(2, h);
 
-        if (state == RADIOLIB_ERR_NONE) {
-          Serial.println("Uplink erfolgreich gesendet!");
-        } else {
-          Serial.print("Uplink-Fehler: ");
-          Serial.println(state);
-        }
+          Serial.println("Sende Uplink an TTN...");
+
+          // Da das SX1262 Radio-Objekt im RadioLib-LoRaWANNode gekapselt ist,
+          // senden wir den Uplink über die loraWAN-Instanz (Port 1)
+          int16_t state = loraWAN.sendReceive(lpp.getBuffer(), lpp.getSize(), 1);
+
+          if (state == RADIOLIB_ERR_NONE) {
+            Serial.println("Uplink erfolgreich gesendet!");
+          } else {
+            Serial.print("Uplink-Fehler: ");
+            Serial.println(state);
+          }
+          // Werte für den nächsten Vergleich sichern
+          lastSentTemp = t;
+          lastSentHum = h;
+          lastHeartbeatMillis = currentMillis;
+        } else
+          Serial.println("Skip sending Uplink to TTN - no change in measurements.");
       }
     }
 
