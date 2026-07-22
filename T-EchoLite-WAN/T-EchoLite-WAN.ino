@@ -203,10 +203,10 @@ void loop() {
     Temp = !Temp;
   }
 
-  // 2. Sensor-Messung (alle 60 Sekunden)
-  static unsigned long lastSensorMillis = -60000;
+  // 2. Sensor-Messung (alle 2*60 Sekunden)
+  static unsigned long lastSensorMillis = -2*60000;
   unsigned long currentMillis = millis();
-  if (currentMillis - lastSensorMillis >= 60000) {
+  if (currentMillis - lastSensorMillis >= 2*60000) {
     lastSensorMillis = currentMillis;
 
     // 1. I2C Bus aktiv für die Messung vorbereiten
