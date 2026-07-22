@@ -8,7 +8,7 @@ LoRaWAN implementation with temperature and humidity sensor / display based on L
 4. register the gateway in TTN  ==> achieved
 5. create application in TTN and get the TTN keys for the end device ==> achieved
 6. extend the code on T-Echo Lite about LoRaWAN implementation (device activation, measurement upload) ==> achieved
-7. Connect an IoT data dashboard to the data in TTN (with Datacake)
+7. Connect an IoT data dashboard to the data in TTN (with Datacake) ==> achieved
 
 ## 1. Connect sensor to T-Echo
 - connect SHT31 to T-Echo Lite using the following pins
@@ -27,7 +27,7 @@ LoRaWAN implementation with temperature and humidity sensor / display based on L
 - configure gateway network, internet access, LoRa band, TTN network
 ### RAK7246G:
   - [RAK7246G Quick Start Guide](https://docs.rakwireless.com/product-categories/wisgate/rak7246g/quickstart)
-  - verify / change the TTN server name to new TTN V3 name (assuming EU1 selected in gateway setup in TTN; check the gateway configuration in general settings in TTN console; s. chapter Register gateway in TTN): ask-it.eu1.cloud.thethings.network
+  - verify / change the TTN server name to new TTN V3 name (assuming EU1 selected in gateway setup in TTN; check the gateway configuration in general settings in TTN console; s. chapter Register gateway in TTN; assuming ask-it as organization name): ask-it.eu1.cloud.thethings.network
   - enable and restart LoRa services (assuming service name ttn-gateway): sudo systemctl enable ttn-gateway | sudo systemctl start ttn-gateway | sudo systemctl status ttn-gateway
   - verify communication of the gateway with TTN: sudo journalctl -u ttn-gateway -f 
   - verify gateway connectivity status in TTN console (should be Connected)
@@ -51,7 +51,7 @@ LoRaWAN implementation with temperature and humidity sensor / display based on L
 - create organization and application in TTN (outdated, still helpful)
   - [Setup LoRaWAN Network in TTN](https://docs.rakwireless.com/product-categories/wisgate/rak7246g/lorawan-network-server-guide)
 
-- register gateway in TTNS (helpful, but related to )
+- register gateway in TTNS (helpful, but related to TTN gateway)
   - [Setup LoRaWAN gateway on TTN Gateway Pro](https://www.thethingsindustries.com/docs/getting-started/3-try-starter-kit/)
     - for RAK LoRa gateway: ensure disabling authenticated connection
 
@@ -80,7 +80,8 @@ LoRaWAN implementation with temperature and humidity sensor / display based on L
 - change configuration of the new device
   - product and hardware: 
     - adapt the payload decoder (hint: use use rawPayload, not payload data)
-  
+
+```Javascript  
 function Decoder(bytes, port) {
     var measurements = [];
     
@@ -103,5 +104,6 @@ function Decoder(bytes, port) {
     return measurements;
 }
 
-  - fields: create TEMPERATURE and HUMIDITY fields with Numeric type and appropriate semantic
+    - fields: create TEMPERATURE and HUMIDITY fields with Numeric type and appropriate semantic
 - create dashboards (e.g., chart with two data linesd) using the fields according to needs 
+```
