@@ -18,7 +18,7 @@ SX1262 radio = new Module(SX1262_CS, SX1262_DIO1, SX1262_RST, SX1262_BUSY, Custo
 Adafruit_SHT31 sht31 = Adafruit_SHT31();  // Globales Objekt
 
 // trigger battery measurement
-bool Temp = false;
+bool manualTrigger = false;
 volatile bool KET1_Triggered_Flag = false;
 
 // LoRaWAN-Instanz - sie nutzt das existierende radio-Objekt
@@ -212,7 +212,7 @@ void loop() {
 
     Serial.println("KEY1_Triggered");
 
-    Temp = !Temp;
+    manualTrigger = !manualTrigger;
   }
 
   // 2. Sensor-Messung (alle 2*60 Sekunden)
@@ -235,18 +235,43 @@ void loop() {
       // 3. SPI-Bus für das Display exklusiv zurückgewinnen
       Custom_SPI_0.end();
       Custom_SPI_0.begin();
+      delay(10); // Kurze Stabilisierung für den SPI-Bus nach Reinit
+
+      // ADC Wert direkt VOR dem Display-Zusammenbau holen, damit wir alles zusammen haben
+      uint32_t adc = analogRead(BATTERY_ADC_DATA);
+      float battVoltage = 0.0;
+      if (adc > 0) {
+        battVoltage = (((float)adc * ((3000.0 / 4096.0))) / 1000.0) * 2.0;
+      }
 
       display.clearBuffer();
+
       display.setFont(&FreeSans9pt7b);
       display.setTextSize(3);
       display.setCursor(5, 50);
       display.printf("%.1f C", t);
       display.setCursor(5, 120);
       display.printf("%.1f %%", h);
+
+      // Batteriespannung im selben Puffer ergänzen
+      if (adc > 0) {
+        display.setTextSize(1);
+        display.setCursor(5, 160);
+        display.printf("Battery: %.03f V", battVoltage);
+      }
+
       display.display();
+      delay(10);  // Kurz warten, damit der Controller den Befehl verarbeitet
 
       // SPI nach Display-Refresh wieder schlafen legen, um LoRa nicht zu stören
       Custom_SPI_0.end();
+
+      // Serielle Ausgabe zur Kontrolle
+      if (adc > 0) {
+        Serial.print("ADC Value: ");
+        Serial.println(adc);
+        Serial.printf("Battery Voltage: %.03f V\n\n", battVoltage);
+      }
 
       // LoRa / CayenneLPP sending
       if (loRaWAN_started) {
@@ -255,7 +280,7 @@ void loop() {
         bool sendReasonHeartbeat = (currentMillis - lastHeartbeatMillis >= HEARTBEAT_INTERVAL);
 
         // Wenn sich genug geändert hat, ein Heartbeat fällig ist ODER der Button gedrückt wurde:
-        if (sendReasonTempChange || sendReasonHumChange || sendReasonHeartbeat) {
+        if (sendReasonTempChange || sendReasonHumChange || sendReasonHeartbeat || manualTrigger) {
 
           lpp.reset();
           // Kanal 1: Temperatur
@@ -284,8 +309,8 @@ void loop() {
       }
     }
 
-    // show battery measurement results
-    if (Temp == false) {
+    // handle battery measurement request
+    if (manualTrigger == false) {
       digitalWrite(LED_1, HIGH);
 
       digitalWrite(BATTERY_MEASUREMENT_CONTROL, LOW);  // Turn off battery voltage measurement
@@ -295,21 +320,6 @@ void loop() {
 
       digitalWrite(BATTERY_MEASUREMENT_CONTROL, HIGH);  // Enable battery voltage measurement
       Serial.print("Turn on battery voltage measurement\n");
-    }
-
-    uint32_t adc = analogRead(BATTERY_ADC_DATA);
-    if (adc > 0) {
-      Serial.print("ADC Value: ");
-      Serial.println(adc);
-      Serial.printf("ADC Voltage: %.03f V\n", ((float)adc * ((3000.0 / 4096.0))) / 1000.0);
-      Serial.printf("Battery Voltage: %.03f V\n", (((float)adc * ((3000.0 / 4096.0))) / 1000.0) * 2.0);
-      Serial.println();
-
-      display.setFont(&FreeSans9pt7b);
-      display.setTextSize(1);
-      display.setCursor(5, 160);
-      display.printf("Battery: %.03f V", (((float)adc * ((3000.0 / 4096.0))) / 1000.0) * 2.0);
-      display.display();
     }
   }
 }
