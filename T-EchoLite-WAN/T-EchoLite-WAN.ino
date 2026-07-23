@@ -221,6 +221,19 @@ void loop() {
   if (currentMillis - lastSensorMillis >= 2 * 60000) {
     lastSensorMillis = currentMillis;
 
+    // handle battery measurement request
+    if (manualTrigger == false) {
+      digitalWrite(LED_2, HIGH);
+
+      digitalWrite(BATTERY_MEASUREMENT_CONTROL, LOW);  // Turn off battery voltage measurement
+      Serial.print("Turn off battery voltage measurement\n");
+    } else {
+      digitalWrite(LED_2, LOW);
+
+      digitalWrite(BATTERY_MEASUREMENT_CONTROL, HIGH);  // Enable battery voltage measurement
+      Serial.print("Turn on battery voltage measurement\n");
+    }
+
     // 1. I2C Bus aktiv für die Messung vorbereiten
     Wire.begin();
 
@@ -235,7 +248,7 @@ void loop() {
       // 3. SPI-Bus für das Display exklusiv zurückgewinnen
       Custom_SPI_0.end();
       Custom_SPI_0.begin();
-      delay(10); // Kurze Stabilisierung für den SPI-Bus nach Reinit
+      delay(10);  // Kurze Stabilisierung für den SPI-Bus nach Reinit
 
       // ADC Wert direkt VOR dem Display-Zusammenbau holen, damit wir alles zusammen haben
       uint32_t adc = analogRead(BATTERY_ADC_DATA);
@@ -270,7 +283,7 @@ void loop() {
       if (adc > 0) {
         Serial.print("ADC Value: ");
         Serial.println(adc);
-        Serial.printf("Battery Voltage: %.03f V\n\n", battVoltage);
+        Serial.printf("Battery Voltage: %.03f V\n", battVoltage);
       }
 
       // LoRa / CayenneLPP sending
@@ -307,19 +320,6 @@ void loop() {
         } else
           Serial.println("Skip sending Uplink to TTN - no change in measurements.");
       }
-    }
-
-    // handle battery measurement request
-    if (manualTrigger == false) {
-      digitalWrite(LED_1, HIGH);
-
-      digitalWrite(BATTERY_MEASUREMENT_CONTROL, LOW);  // Turn off battery voltage measurement
-      Serial.print("Turn off battery voltage measurement\n");
-    } else {
-      digitalWrite(LED_1, LOW);
-
-      digitalWrite(BATTERY_MEASUREMENT_CONTROL, HIGH);  // Enable battery voltage measurement
-      Serial.print("Turn on battery voltage measurement\n");
     }
   }
 }
