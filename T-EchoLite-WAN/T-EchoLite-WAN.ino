@@ -19,6 +19,7 @@ Adafruit_SHT31 sht31 = Adafruit_SHT31();  // Globales Objekt
 
 // trigger battery measurement
 bool manualTrigger = false;
+bool automaticTrigger = false;
 volatile bool KET1_Triggered_Flag = false;
 
 // LoRaWAN-Instanz - sie nutzt das existierende radio-Objekt
@@ -42,6 +43,11 @@ const unsigned long HEARTBEAT_INTERVAL = 30UL * 60UL * 1000UL;  // 30 Minuten He
 // thtreshold based sending
 const float TEMP_THRESHOLD = 0.2;  // Abweichung in °C
 const float HUM_THRESHOLD = 1.0;   // Abweichung in %
+
+static unsigned long lastSensorMillis = -2 * 60000;
+static unsigned long lastDailyBatteryMillis = 0;
+
+const unsigned long DAILY_BATTERY_INTERVAL = 24UL * 60UL * 60UL * 1000UL;  // 24 Stunden
 
 void External_Interrupt_Triggered() {
   KET1_Triggered_Flag = true;
@@ -216,12 +222,11 @@ void loop() {
   }
 
   // 2. Sensor-Messung (alle 2*60 Sekunden)
-  static unsigned long lastSensorMillis = -2 * 60000;
   unsigned long currentMillis = millis();
   if (currentMillis - lastSensorMillis >= 2 * 60000) {
     lastSensorMillis = currentMillis;
 
-    // handle battery measurement request
+    // handle manual battery measurement / LoRa send request
     if (manualTrigger == false) {
       digitalWrite(LED_2, HIGH);
 
@@ -232,6 +237,21 @@ void loop() {
 
       digitalWrite(BATTERY_MEASUREMENT_CONTROL, HIGH);  // Enable battery voltage measurement
       Serial.print("Turn on battery voltage measurement\n");
+    }
+    delay(5);
+
+    // Prüfen, ob seit der letzten täglichen Messung 24 Stunden vergangen sind
+    automaticTrigger = false;
+    if (currentMillis - lastDailyBatteryMillis >= DAILY_BATTERY_INTERVAL || lastDailyBatteryMillis == 0) {
+      // Beim allerersten Start nach dem Boot kannst du es optional auch direkt machen
+      // oder erst nach 24h. Hier machen wir es nach 24h:
+      if (lastDailyBatteryMillis != 0) {
+        automaticTrigger = true;
+        lastDailyBatteryMillis = currentMillis;  // Timer zurücksetzen
+      } else {
+        // Setze den Timer beim ersten Boot einmalig, damit er ab jetzt alle 24h läuft
+        lastDailyBatteryMillis = currentMillis;
+      }
     }
 
     // 1. I2C Bus aktiv für die Messung vorbereiten
@@ -251,8 +271,18 @@ void loop() {
       delay(10);  // Kurze Stabilisierung für den SPI-Bus nach Reinit
 
       // ADC Wert direkt VOR dem Display-Zusammenbau holen, damit wir alles zusammen haben
-      uint32_t adc = analogRead(BATTERY_ADC_DATA);
       float battVoltage = 0.0;
+      uint32_t adc = 0;
+      if (manualTrigger == true) {
+        adc = analogRead(BATTERY_ADC_DATA);
+      }
+      if (automaticTrigger == true) {
+        digitalWrite(BATTERY_MEASUREMENT_CONTROL, HIGH);  // Enable battery voltage measurement
+        delay(5);
+        adc = analogRead(BATTERY_ADC_DATA);
+        delay(5);
+        digitalWrite(BATTERY_MEASUREMENT_CONTROL, LOW);  // Turn off battery voltage measurement
+      }
       if (adc > 0) {
         battVoltage = (((float)adc * ((3000.0 / 4096.0))) / 1000.0) * 2.0;
       }
@@ -293,13 +323,16 @@ void loop() {
         bool sendReasonHeartbeat = (currentMillis - lastHeartbeatMillis >= HEARTBEAT_INTERVAL);
 
         // Wenn sich genug geändert hat, ein Heartbeat fällig ist ODER der Button gedrückt wurde:
-        if (sendReasonTempChange || sendReasonHumChange || sendReasonHeartbeat || manualTrigger) {
+        if (sendReasonTempChange || sendReasonHumChange || sendReasonHeartbeat || manualTrigger || automaticTrigger) {
 
           lpp.reset();
           // Kanal 1: Temperatur
           lpp.addTemperature(1, t);
           // Kanal 2: Rel. Luftfeuchtigkeit
           lpp.addRelativeHumidity(2, h);
+          // Kanal 3: Batteriespannung (z.B. in Volt, übergeben als float wie z.B. 3.65)
+          if (manualTrigger || automaticTrigger)
+            lpp.addAnalogInput(3, battVoltage);
 
           Serial.println("Sende Uplink an TTN...");
 
