@@ -9,6 +9,7 @@ LoRaWAN implementation with temperature and humidity sensor / display based on L
 5. create application in TTN and get the TTN keys for the end device ==> achieved
 6. extend the code on T-Echo Lite about LoRaWAN implementation (device activation, measurement upload) ==> achieved
 7. Connect an IoT data dashboard to the data in TTN (with Datacake) ==> achieved
+8. implement System ON Sleep mode with RAM retention for nRF52
 
 ## 1. Connect sensor to T-Echo
 - connect SHT31 to T-Echo Lite using the following pins
@@ -62,6 +63,7 @@ LoRaWAN implementation with temperature and humidity sensor / display based on L
   - JoinEUI: enter 00 00 00 00 00 00 00 00
   - DevEUI: use generate button to create new device ID
   - AppKey: use generate button to create new application key
+  - configure CayenneLPP decoder for end-device
 
 ## 6. Send measurements to TTN
 - use RadioLib in LoRaWAN mode
@@ -96,6 +98,9 @@ function Decoder(bytes, port) {
             if (dec.relative_humidity_2 !== undefined) {
                 measurements.push({ field: "HUMIDITY", value: dec.relative_humidity_2 });
             }
+            if (dec.analog_in_3 !== undefined) {
+                measurements.push({ field: "VOLTAGE", value: dec.analog_in_3 });
+            }
         }
     } catch (e) {
         // Fehler abfangen
@@ -103,7 +108,13 @@ function Decoder(bytes, port) {
     
     return measurements;
 }
+```
 
     - fields: create TEMPERATURE and HUMIDITY fields with Numeric type and appropriate semantic
 - create dashboards (e.g., chart with two data linesd) using the fields according to needs 
-```
+
+## 8. Implement power saving mode for T-Echo Lite
+- implement System ON Sleep mode with RAM retention for nRF52
+  - considering only uplink to TTN for RadioLib
+  - using the 2min cycle implemented in measurement upload to TTN / Datacake
+  

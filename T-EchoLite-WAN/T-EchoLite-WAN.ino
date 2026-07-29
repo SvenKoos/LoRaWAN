@@ -37,17 +37,19 @@ float lastSentTemp = -999.0;
 float lastSentHum = -999.0;
 
 // Heartbeat
-unsigned long lastHeartbeatMillis = 0;
+static unsigned long lastHeartbeatMillis = 0;
 const unsigned long HEARTBEAT_INTERVAL = 30UL * 60UL * 1000UL;  // 30 Minuten Heartbeat
 
-// thtreshold based sending
+// daily battery measurement
+static unsigned long lastDailyBatteryMillis = 0;
+const unsigned long DAILY_BATTERY_INTERVAL = 24UL * 60UL * 60UL * 1000UL;  // 24 Stunden
+
+// threshold based sending
 const float TEMP_THRESHOLD = 0.2;  // Abweichung in °C
 const float HUM_THRESHOLD = 1.0;   // Abweichung in %
 
+// 2min measurement cycle
 static unsigned long lastSensorMillis = -2 * 60000;
-static unsigned long lastDailyBatteryMillis = 0;
-
-const unsigned long DAILY_BATTERY_INTERVAL = 24UL * 60UL * 60UL * 1000UL;  // 24 Stunden
 
 void External_Interrupt_Triggered() {
   KET1_Triggered_Flag = true;
@@ -204,6 +206,114 @@ void setup(void) {
   analogReadResolution(12);  // Can be 8, 10, 12 or 14
 }
 
+void handleManualTrigger(bool trigger) {
+  // handle manual battery measurement / LoRa send request
+  if (manualTrigger == false) {
+    digitalWrite(LED_2, HIGH);
+
+    digitalWrite(BATTERY_MEASUREMENT_CONTROL, LOW);  // Turn off battery voltage measurement
+    Serial.print("Turn off battery voltage measurement\n");
+  } else {
+    digitalWrite(LED_2, LOW);
+
+    digitalWrite(BATTERY_MEASUREMENT_CONTROL, HIGH);  // Enable battery voltage measurement
+    Serial.print("Turn on battery voltage measurement\n");
+  }
+  delay(5);
+}
+
+void handleLoadMeasurements(float *t, float *h) {
+  // 1. I2C Bus aktiv für die Messung vorbereiten
+  Wire.begin();
+
+  *t = sht31.readTemperature();
+  *h = sht31.readHumidity();
+
+  // 2. I2C Bus sofort wieder "hart" beenden/freigeben
+  // Das verhindert, dass die I2C-Hardware auf den Pins hängen bleibt
+  Wire.end();
+}
+
+float handleDisplayADC(float t, float h) {
+  float batteryVoltage = 0.0;
+
+  // 3. SPI-Bus für das Display exklusiv zurückgewinnen
+  Custom_SPI_0.end();
+  Custom_SPI_0.begin();
+  delay(10);  // Kurze Stabilisierung für den SPI-Bus nach Reinit
+
+  // ADC Wert direkt VOR dem Display-Zusammenbau holen, damit wir alles zusammen haben
+  uint32_t adc = 0;
+  if (manualTrigger == true) {
+    adc = analogRead(BATTERY_ADC_DATA);
+  }
+  if (automaticTrigger == true) {
+    digitalWrite(BATTERY_MEASUREMENT_CONTROL, HIGH);  // Enable battery voltage measurement
+    delay(5);
+    adc = analogRead(BATTERY_ADC_DATA);
+    delay(5);
+    digitalWrite(BATTERY_MEASUREMENT_CONTROL, LOW);  // Turn off battery voltage measurement
+  }
+  if (adc > 0) {
+    batteryVoltage = (((float)adc * ((3000.0 / 4096.0))) / 1000.0) * 2.0;
+  }
+
+  display.clearBuffer();
+
+  display.setFont(&FreeSans9pt7b);
+  display.setTextSize(3);
+  display.setCursor(5, 50);
+  display.printf("%.1f C", t);
+  display.setCursor(5, 120);
+  display.printf("%.1f %%", h);
+
+  // Batteriespannung im selben Puffer ergänzen
+  if (adc > 0) {
+    display.setTextSize(1);
+    display.setCursor(5, 160);
+    display.printf("Battery: %.03f V", batteryVoltage);
+  }
+
+  display.display();
+  delay(10);  // Kurz warten, damit der Controller den Befehl verarbeitet
+
+  // SPI nach Display-Refresh wieder schlafen legen, um LoRa nicht zu stören
+  Custom_SPI_0.end();
+
+  // Serielle Ausgabe zur Kontrolle
+  if (adc > 0) {
+    Serial.print("ADC Value: ");
+    Serial.println(adc);
+    Serial.printf("Battery Voltage: %.03f V\n", batteryVoltage);
+  }
+
+  return batteryVoltage;
+}
+
+void handleLoRaSending(float t, float h, float batteryVoltage) {
+  lpp.reset();
+  // Kanal 1: Temperatur
+  lpp.addTemperature(1, t);
+  // Kanal 2: Rel. Luftfeuchtigkeit
+  lpp.addRelativeHumidity(2, h);
+  // Kanal 3: Batteriespannung (z.B. in Volt, übergeben als float wie z.B. 3.65)
+  if (batteryVoltage > 0)
+    lpp.addAnalogInput(3, batteryVoltage);
+
+  Serial.println("Sende Uplink an TTN...");
+
+  // Da das SX1262 Radio-Objekt im RadioLib-LoRaWANNode gekapselt ist,
+  // senden wir den Uplink über die loraWAN-Instanz (Port 1)
+  int16_t state = loraWAN.sendReceive(lpp.getBuffer(), lpp.getSize(), 1);
+
+  if (state == RADIOLIB_ERR_NONE) {
+    Serial.println("Uplink erfolgreich gesendet!");
+  } else {
+    Serial.print("Uplink-Fehler: ");
+    Serial.println(state);
+  }
+}
+
 void loop() {
   if (!loRaWAN_started) {
     delay(2000);  // Gib dem nRF52 2 Sekunden Zeit nach dem Boot
@@ -226,19 +336,7 @@ void loop() {
   if (currentMillis - lastSensorMillis >= 2 * 60000) {
     lastSensorMillis = currentMillis;
 
-    // handle manual battery measurement / LoRa send request
-    if (manualTrigger == false) {
-      digitalWrite(LED_2, HIGH);
-
-      digitalWrite(BATTERY_MEASUREMENT_CONTROL, LOW);  // Turn off battery voltage measurement
-      Serial.print("Turn off battery voltage measurement\n");
-    } else {
-      digitalWrite(LED_2, LOW);
-
-      digitalWrite(BATTERY_MEASUREMENT_CONTROL, HIGH);  // Enable battery voltage measurement
-      Serial.print("Turn on battery voltage measurement\n");
-    }
-    delay(5);
+    handleManualTrigger(manualTrigger);
 
     // Prüfen, ob seit der letzten täglichen Messung 24 Stunden vergangen sind
     automaticTrigger = false;
@@ -254,67 +352,12 @@ void loop() {
       }
     }
 
-    // 1. I2C Bus aktiv für die Messung vorbereiten
-    Wire.begin();
-
-    float t = sht31.readTemperature();
-    float h = sht31.readHumidity();
-
-    // 2. I2C Bus sofort wieder "hart" beenden/freigeben
-    // Das verhindert, dass die I2C-Hardware auf den Pins hängen bleibt
-    Wire.end();
+    float t;
+    float h;
+    handleLoadMeasurements(&t, &h);
 
     if (!isnan(t)) {
-      // 3. SPI-Bus für das Display exklusiv zurückgewinnen
-      Custom_SPI_0.end();
-      Custom_SPI_0.begin();
-      delay(10);  // Kurze Stabilisierung für den SPI-Bus nach Reinit
-
-      // ADC Wert direkt VOR dem Display-Zusammenbau holen, damit wir alles zusammen haben
-      float battVoltage = 0.0;
-      uint32_t adc = 0;
-      if (manualTrigger == true) {
-        adc = analogRead(BATTERY_ADC_DATA);
-      }
-      if (automaticTrigger == true) {
-        digitalWrite(BATTERY_MEASUREMENT_CONTROL, HIGH);  // Enable battery voltage measurement
-        delay(5);
-        adc = analogRead(BATTERY_ADC_DATA);
-        delay(5);
-        digitalWrite(BATTERY_MEASUREMENT_CONTROL, LOW);  // Turn off battery voltage measurement
-      }
-      if (adc > 0) {
-        battVoltage = (((float)adc * ((3000.0 / 4096.0))) / 1000.0) * 2.0;
-      }
-
-      display.clearBuffer();
-
-      display.setFont(&FreeSans9pt7b);
-      display.setTextSize(3);
-      display.setCursor(5, 50);
-      display.printf("%.1f C", t);
-      display.setCursor(5, 120);
-      display.printf("%.1f %%", h);
-
-      // Batteriespannung im selben Puffer ergänzen
-      if (adc > 0) {
-        display.setTextSize(1);
-        display.setCursor(5, 160);
-        display.printf("Battery: %.03f V", battVoltage);
-      }
-
-      display.display();
-      delay(10);  // Kurz warten, damit der Controller den Befehl verarbeitet
-
-      // SPI nach Display-Refresh wieder schlafen legen, um LoRa nicht zu stören
-      Custom_SPI_0.end();
-
-      // Serielle Ausgabe zur Kontrolle
-      if (adc > 0) {
-        Serial.print("ADC Value: ");
-        Serial.println(adc);
-        Serial.printf("Battery Voltage: %.03f V\n", battVoltage);
-      }
+      float battVoltage = handleDisplayADC(t, h);
 
       // LoRa / CayenneLPP sending
       if (loRaWAN_started) {
@@ -324,28 +367,8 @@ void loop() {
 
         // Wenn sich genug geändert hat, ein Heartbeat fällig ist ODER der Button gedrückt wurde:
         if (sendReasonTempChange || sendReasonHumChange || sendReasonHeartbeat || manualTrigger || automaticTrigger) {
+          handleLoRaSending(t, h, battVoltage);
 
-          lpp.reset();
-          // Kanal 1: Temperatur
-          lpp.addTemperature(1, t);
-          // Kanal 2: Rel. Luftfeuchtigkeit
-          lpp.addRelativeHumidity(2, h);
-          // Kanal 3: Batteriespannung (z.B. in Volt, übergeben als float wie z.B. 3.65)
-          if (manualTrigger || automaticTrigger)
-            lpp.addAnalogInput(3, battVoltage);
-
-          Serial.println("Sende Uplink an TTN...");
-
-          // Da das SX1262 Radio-Objekt im RadioLib-LoRaWANNode gekapselt ist,
-          // senden wir den Uplink über die loraWAN-Instanz (Port 1)
-          int16_t state = loraWAN.sendReceive(lpp.getBuffer(), lpp.getSize(), 1);
-
-          if (state == RADIOLIB_ERR_NONE) {
-            Serial.println("Uplink erfolgreich gesendet!");
-          } else {
-            Serial.print("Uplink-Fehler: ");
-            Serial.println(state);
-          }
           // Werte für den nächsten Vergleich sichern
           lastSentTemp = t;
           lastSentHum = h;
