@@ -26,7 +26,6 @@ volatile bool KET1_Triggered_Flag = false;
 // create the LoRaWAN node
 LoRaWANNode loraWAN(&radio, &Region, subBand);
 
-bool ttn_joined = false;
 bool loRaWAN_started = false;
 
 // CayenneLPP-Objekt erstellen (51 Bytes Puffer reichen dicke aus)
@@ -315,25 +314,36 @@ void handleLoRaSending(float t, float h, float batteryVoltage) {
 }
 
 void loop() {
+  // 1. LoRaWAN Initialisierung beim Start (falls noch nicht geschehen)
   if (!loRaWAN_started) {
-    delay(2000);  // Gib dem nRF52 2 Sekunden Zeit nach dem Boot
+    // Statt delay(2000) nutzen wir eine stromsparende Pause, 
+    // in der Interrupts/Millis aber weiterlaufen können:
+    unsigned long startBootWait = millis();
+    while (millis() - startBootWait < 2000) {
+      waitForEvent(); // nRF52 schläft stromsparend bis zum nächsten Event
+    }
+    
     Serial.println("Starte LoRaWAN-Join jetzt...");
     Start_TTN_Join();
   }
 
+  // 2. Button-Trigger verarbeiten (falls Interrupt ausgelöst hat)
   if (KET1_Triggered_Flag == true) {
-    delay(300);
+    // Kurzes Entprellen (statt delay(300) am besten mit non-blocking oder kurzem Sleep)
+    unsigned long debounceStart = millis();
+    while (millis() - debounceStart < 300) {
+      waitForEvent();
+    }
 
     KET1_Triggered_Flag = false;
-
     Serial.println("KEY1_Triggered");
-
     manualTrigger = !manualTrigger;
   }
 
-  // 2. Sensor-Messung (alle 2*60 Sekunden)
+  // 3. Sensor-Messung (alle 2*60 Sekunden)
   unsigned long currentMillis = millis();
-  if (currentMillis - lastSensorMillis >= 2 * 60000) {
+  if (currentMillis - lastSensorMillis >= 2 * 60000 || lastSensorMillis > currentMillis) {
+    // (Hinweis: `lastSensorMillis > currentMillis` fängt den seltenen Fall eines millis()-Overflows nach ~49 Tagen ab)
     lastSensorMillis = currentMillis;
 
     handleManualTrigger(manualTrigger);
@@ -341,13 +351,10 @@ void loop() {
     // Prüfen, ob seit der letzten täglichen Messung 24 Stunden vergangen sind
     automaticTrigger = false;
     if (currentMillis - lastDailyBatteryMillis >= DAILY_BATTERY_INTERVAL || lastDailyBatteryMillis == 0) {
-      // Beim allerersten Start nach dem Boot kannst du es optional auch direkt machen
-      // oder erst nach 24h. Hier machen wir es nach 24h:
       if (lastDailyBatteryMillis != 0) {
         automaticTrigger = true;
         lastDailyBatteryMillis = currentMillis;  // Timer zurücksetzen
       } else {
-        // Setze den Timer beim ersten Boot einmalig, damit er ab jetzt alle 24h läuft
         lastDailyBatteryMillis = currentMillis;
       }
     }
@@ -373,9 +380,15 @@ void loop() {
           lastSentTemp = t;
           lastSentHum = h;
           lastHeartbeatMillis = currentMillis;
-        } else
+        } else {
           Serial.println("Skip sending Uplink to TTN - no change in measurements.");
+        }
       }
     }
   }
+
+  // 4. ENERGIESPAR-MODUS: 
+  // Anstatt die CPU in einer leeren Schleife glühen zu lassen, schicken wir den nRF52 
+  // bis zum nächsten Interrupt (z.B. dem nächsten Millis-Tick oder Tasterdruck) schlafen!
+  waitForEvent();
 }
