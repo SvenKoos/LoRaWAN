@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <CayenneLPP.h>
+#include <SensirionI2cScd4x.h>
 #include "Adafruit_EPD.h"
 #include "RadioLib.h"
 #include "t_echo_lite_config.h"
@@ -15,7 +16,9 @@ Adafruit_SSD1681 display(SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_DC, SCREEN_RST,
 SPIClass Custom_SPI_3(NRF_SPIM3, SX1262_MISO, SX1262_SCLK, SX1262_MOSI);
 SX1262 radio = new Module(SX1262_CS, SX1262_DIO1, SX1262_RST, SX1262_BUSY, Custom_SPI_3);
 
-Adafruit_SHT31 sht31 = Adafruit_SHT31();  // Globales Objekt
+// Instanz für die Sensoren erstellen
+Adafruit_SHT31 sht31 = Adafruit_SHT31();  // Globales Objekt SHT31
+SensirionI2cScd4x scd4x;
 
 // trigger battery measurement
 bool manualTrigger = false;
@@ -34,6 +37,7 @@ CayenneLPP lpp(51);
 // Zustandsvariablen für die änderungsbasierte Sendung
 float lastSentTemp = -999.0;
 float lastSentHum = -999.0;
+uint16_t lastSentCO2 = 0;
 
 // Heartbeat
 static unsigned long lastHeartbeatMillis = 0;
@@ -46,9 +50,14 @@ const unsigned long DAILY_BATTERY_INTERVAL = 24UL * 60UL * 60UL * 1000UL;  // 24
 // threshold based sending
 const float TEMP_THRESHOLD = 0.2;  // Abweichung in °C
 const float HUM_THRESHOLD = 1.0;   // Abweichung in %
+const uint16_t CO2_THRESHOLD = 100;
 
 // 2min measurement cycle
 static unsigned long lastSensorMillis = -2 * 60000;
+
+// Sensor support
+bool hasSHT31 = false;
+bool hasSCD4X = false;
 
 void External_Interrupt_Triggered() {
   KET1_Triggered_Flag = true;
@@ -158,6 +167,13 @@ void Start_TTN_Join() {
 void setup(void) {
   Serial.begin(115200);
 
+  // E-Paper Hard Reset erzwingen
+  pinMode(SCREEN_RST, OUTPUT);
+  digitalWrite(SCREEN_RST, LOW);
+  delay(20);
+  digitalWrite(SCREEN_RST, HIGH);
+  delay(50);
+
   // 3.3V Power ON
   pinMode(RT9080_EN, OUTPUT);
   digitalWrite(RT9080_EN, HIGH);
@@ -185,11 +201,25 @@ void setup(void) {
   Wire.begin();
   delay(100);
 
-  // 3. Sensor initialisieren
+  // 3. Sensor SHT31 initialisieren
   if (!sht31.begin(0x44)) {
     Serial.println("SHT3x nicht gefunden!");
   } else {
+    hasSHT31 = true;
     Serial.println("SHT3x bereit.");
+  }
+
+  // 4. Sensor SCD4X initialisieren
+  uint16_t error;
+  scd4x.begin(Wire, 0x62);
+  error = scd4x.stopPeriodicMeasurement();
+  if (error) {
+    Serial.print("SCD4X nicht gefunden! Fehler: ");
+    Serial.printf("%d", error);
+    Serial.println();
+  } else {
+    hasSCD4X = true;
+    Serial.println("SCD4X bereit.");
   }
 
   // enable  battery measurement
@@ -207,7 +237,7 @@ void setup(void) {
 
 void handleManualTrigger(bool trigger) {
   // handle manual battery measurement / LoRa send request
-  if (manualTrigger == false) {
+  if (trigger == false) {
     digitalWrite(LED_2, HIGH);
 
     digitalWrite(BATTERY_MEASUREMENT_CONTROL, LOW);  // Turn off battery voltage measurement
@@ -221,19 +251,26 @@ void handleManualTrigger(bool trigger) {
   delay(5);
 }
 
-void handleLoadMeasurements(float *t, float *h) {
+void handleLoadMeasurements(float *t, float *h, uint16_t *co2) {
   // 1. I2C Bus aktiv für die Messung vorbereiten
   Wire.begin();
 
-  *t = sht31.readTemperature();
-  *h = sht31.readHumidity();
+  if (hasSCD4X) {
+    scd4x.readMeasurement(*co2, *t, *h);  // CO2 auslesen
+  } else {
+    *co2 = 0;  // Sauberer Default-Wert, wenn kein SCD4X da ist
+  }
+  if (hasSHT31) {
+    *t = sht31.readTemperature();
+    *h = sht31.readHumidity();
+  }
 
   // 2. I2C Bus sofort wieder "hart" beenden/freigeben
   // Das verhindert, dass die I2C-Hardware auf den Pins hängen bleibt
-  Wire.end();
+  // Wire.end();
 }
 
-float handleDisplayADC(float t, float h) {
+float handleDisplayADC(float t, float h, uint16_t co2) {
   float batteryVoltage = 0.0;
 
   // 3. SPI-Bus für das Display exklusiv zurückgewinnen
@@ -260,16 +297,20 @@ float handleDisplayADC(float t, float h) {
   display.clearBuffer();
 
   display.setFont(&FreeSans9pt7b);
-  display.setTextSize(3);
-  display.setCursor(5, 50);
+  display.setTextSize(2);
+  display.setCursor(5, 40);
   display.printf("%.1f C", t);
-  display.setCursor(5, 120);
+  display.setCursor(5, 90);
   display.printf("%.1f %%", h);
+  if (hasSCD4X) {
+    display.setCursor(5, 140);
+    display.printf("%3d ppm", co2);
+  }
 
   // Batteriespannung im selben Puffer ergänzen
   if (adc > 0) {
     display.setTextSize(1);
-    display.setCursor(5, 160);
+    display.setCursor(5, 180);
     display.printf("Battery: %.03f V", batteryVoltage);
   }
 
@@ -289,16 +330,21 @@ float handleDisplayADC(float t, float h) {
   return batteryVoltage;
 }
 
-void handleLoRaSending(float t, float h, float batteryVoltage) {
+void handleLoRaSending(float t, float h, uint16_t co2, float batteryVoltage) {
   lpp.reset();
-  // Kanal 1: Temperatur
-  lpp.addTemperature(1, t);
-  // Kanal 2: Rel. Luftfeuchtigkeit
-  lpp.addRelativeHumidity(2, h);
+  if (hasSHT31) {
+    // Kanal 1: Temperatur
+    lpp.addTemperature(1, t);
+    // Kanal 2: Rel. Luftfeuchtigkeit
+    lpp.addRelativeHumidity(2, h);
+  }
   // Kanal 3: Batteriespannung (z.B. in Volt, übergeben als float wie z.B. 3.65)
   if (batteryVoltage > 0)
     lpp.addAnalogInput(3, batteryVoltage);
-
+  // Kanal 4: CO2
+  if (hasSCD4X) {
+    lpp.addConcentration(4, co2);  // Nur wenn SCD4X aktiv ist, wandert CO2 in den Uplink
+  }
   Serial.println("Sende Uplink an TTN...");
 
   // Da das SX1262 Radio-Objekt im RadioLib-LoRaWANNode gekapselt ist,
@@ -316,13 +362,13 @@ void handleLoRaSending(float t, float h, float batteryVoltage) {
 void loop() {
   // 1. LoRaWAN Initialisierung beim Start (falls noch nicht geschehen)
   if (!loRaWAN_started) {
-    // Statt delay(2000) nutzen wir eine stromsparende Pause, 
+    // Statt delay(2000) nutzen wir eine stromsparende Pause,
     // in der Interrupts/Millis aber weiterlaufen können:
     unsigned long startBootWait = millis();
     while (millis() - startBootWait < 2000) {
-      waitForEvent(); // nRF52 schläft stromsparend bis zum nächsten Event
+      waitForEvent();  // nRF52 schläft stromsparend bis zum nächsten Event
     }
-    
+
     Serial.println("Starte LoRaWAN-Join jetzt...");
     Start_TTN_Join();
   }
@@ -361,24 +407,28 @@ void loop() {
 
     float t;
     float h;
-    handleLoadMeasurements(&t, &h);
+    uint16_t co2 = 0;
+    handleLoadMeasurements(&t, &h, &co2);
+    Serial.printf("Sensor-Messwerte -> T: %.2f, H: %.2f, CO2: %d\n", t, h, co2);
 
     if (!isnan(t)) {
-      float battVoltage = handleDisplayADC(t, h);
+      float battVoltage = handleDisplayADC(t, h, co2);
 
       // LoRa / CayenneLPP sending
       if (loRaWAN_started) {
         bool sendReasonTempChange = (abs(t - lastSentTemp) >= TEMP_THRESHOLD);
         bool sendReasonHumChange = (abs(h - lastSentHum) >= HUM_THRESHOLD);
+        bool sendReasonCO2Change = (abs(h - lastSentCO2) >= CO2_THRESHOLD);
         bool sendReasonHeartbeat = (currentMillis - lastHeartbeatMillis >= HEARTBEAT_INTERVAL);
 
         // Wenn sich genug geändert hat, ein Heartbeat fällig ist ODER der Button gedrückt wurde:
-        if (sendReasonTempChange || sendReasonHumChange || sendReasonHeartbeat || manualTrigger || automaticTrigger) {
-          handleLoRaSending(t, h, battVoltage);
+        if (sendReasonTempChange || sendReasonHumChange || sendReasonHeartbeat || sendReasonCO2Change || manualTrigger || automaticTrigger) {
+          handleLoRaSending(t, h, co2, battVoltage);
 
           // Werte für den nächsten Vergleich sichern
           lastSentTemp = t;
           lastSentHum = h;
+          lastSentCO2 = co2;
           lastHeartbeatMillis = currentMillis;
         } else {
           Serial.println("Skip sending Uplink to TTN - no change in measurements.");
@@ -387,8 +437,8 @@ void loop() {
     }
   }
 
-  // 4. ENERGIESPAR-MODUS: 
-  // Anstatt die CPU in einer leeren Schleife glühen zu lassen, schicken wir den nRF52 
+  // 4. ENERGIESPAR-MODUS:
+  // Anstatt die CPU in einer leeren Schleife glühen zu lassen, schicken wir den nRF52
   // bis zum nächsten Interrupt (z.B. dem nächsten Millis-Tick oder Tasterdruck) schlafen!
   waitForEvent();
 }
