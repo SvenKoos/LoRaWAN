@@ -310,7 +310,7 @@ float handleDisplayADC(float t, float h, uint16_t co2) {
   // Batteriespannung im selben Puffer ergänzen
   if (adc > 0) {
     display.setTextSize(1);
-    display.setCursor(5, 180);
+    display.setCursor(5, 170);
     display.printf("Battery: %.03f V", batteryVoltage);
   }
 
@@ -384,6 +384,9 @@ void loop() {
     KET1_Triggered_Flag = false;
     Serial.println("KEY1_Triggered");
     manualTrigger = !manualTrigger;
+
+    // Nach Tastendruck sofortigen Messzyklus erzwingen
+    lastSensorMillis = millis() - (2 * 60000);
   }
 
   // 3. Sensor-Messung (alle 2*60 Sekunden)
@@ -440,5 +443,6 @@ void loop() {
   // 4. ENERGIESPAR-MODUS:
   // Anstatt die CPU in einer leeren Schleife glühen zu lassen, schicken wir den nRF52
   // bis zum nächsten Interrupt (z.B. dem nächsten Millis-Tick oder Tasterdruck) schlafen!
-  waitForEvent();
+  // waitForEvent();
+  delay(1000);
 }
