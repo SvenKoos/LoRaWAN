@@ -9,7 +9,8 @@ LoRaWAN implementation with temperature and humidity sensor / display based on L
 5. create application in TTN and get the TTN keys for the end device ==> achieved
 6. extend the code on T-Echo Lite about LoRaWAN implementation (device activation, measurement upload) ==> achieved
 7. Connect an IoT data dashboard to the data in TTN (with Datacake) ==> achieved
-8. implement System ON Sleep mode with RAM retention for nRF52
+8. implement System ON Sleep mode with RAM retention for nRF52 ==> started
+9. complete the sensor set to full air quality monitoring ==> started
 
 ## 1. Connect sensor to T-Echo
 - connect SHT31 to T-Echo Lite using the following pins
@@ -64,6 +65,7 @@ LoRaWAN implementation with temperature and humidity sensor / display based on L
   - DevEUI: use generate button to create new device ID
   - AppKey: use generate button to create new application key
   - configure CayenneLPP decoder for end-device
+  - LoRa version 1.0.3
 
 ## 6. Send measurements to TTN
 - use RadioLib in LoRaWAN mode
@@ -82,6 +84,7 @@ LoRaWAN implementation with temperature and humidity sensor / display based on L
 - change configuration of the new device
   - product and hardware: 
     - adapt the payload decoder (hint: use use rawPayload, not payload data)
+	- create fields TEMPERATURE, HUMIDITY, VOLTAGE (Numeric with appropriate semantic), LOCATION (Location type and sematic)
 
 ```Javascript  
 function Decoder(bytes, port) {
@@ -89,21 +92,38 @@ function Decoder(bytes, port) {
     
     try {
         // Bei TTN-Integrationen in Datacake liegen die Webhook-Daten in rawPayload
-        if (typeof rawPayload !== 'undefined' && rawPayload.uplink_message && rawPayload.uplink_message.decoded_payload) {
-            var dec = rawPayload.uplink_message.decoded_payload;
+        if (typeof rawPayload !== 'undefined' && rawPayload.uplink_message) {
             
-            if (dec.temperature_1 !== undefined) {
-                measurements.push({ field: "TEMPERATURE", value: dec.temperature_1 });
+            // 1. Sensordaten aus dem Decoded Payload auslesen
+            if (rawPayload.uplink_message.decoded_payload) {
+                var dec = rawPayload.uplink_message.decoded_payload;
+                
+                if (dec.temperature_1 !== undefined) {
+                    measurements.push({ field: "TEMPERATURE", value: dec.temperature_1 });
+                }
+                if (dec.relative_humidity_2 !== undefined) {
+                    measurements.push({ field: "HUMIDITY", value: dec.relative_humidity_2 });
+                }
+                if (dec.analog_in_3 !== undefined) {
+                    measurements.push({ field: "VOLTAGE", value: dec.analog_in_3 });
+                }
             }
-            if (dec.relative_humidity_2 !== undefined) {
-                measurements.push({ field: "HUMIDITY", value: dec.relative_humidity_2 });
-            }
-            if (dec.analog_in_3 !== undefined) {
-                measurements.push({ field: "VOLTAGE", value: dec.analog_in_3 });
+            
+            // 2. GPS-Position sicher auslesen (falls in TTN Registry gesetzt)
+            if (rawPayload.uplink_message.locations && rawPayload.uplink_message.locations.user) {
+                var lat = rawPayload.uplink_message.locations.user.latitude;
+                var lon = rawPayload.uplink_message.locations.user.longitude;
+                
+                if (lat !== undefined && lon !== undefined) {
+                    measurements.push({ 
+                        field: "LOCATION", // Muss exakt wie dein Geo-Feld in Datacake heißen
+                        value: "(" + lat + "," + lon + ")" 
+                    });
+                }
             }
         }
     } catch (e) {
-        // Fehler abfangen
+        // Fehler abfangen, damit der Decoder nicht abstürzt
     }
     
     return measurements;
@@ -117,4 +137,12 @@ function Decoder(bytes, port) {
 - implement System ON Sleep mode with RAM retention for nRF52
   - considering only uplink to TTN for RadioLib
   - using the 2min cycle implemented in measurement upload to TTN / Datacake
+  - intermediate solution: delay(1000) in loop()
+  
+## 9. Add CO2 sensor for full air quality monitoring
+- add SCD40 sensor to I2C bus
+- extend the software to handle multiple sensors
+  - introduce automatic detection of supported sensor types
+  - add CO2 concentration to CayenneLLP payload
+- adapt the Datacake configuration (fields, decoder)
   
