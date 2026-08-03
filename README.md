@@ -1,5 +1,5 @@
 # LoRaWAN
-LoRaWAN implementation with temperature and humidity sensor / display based on LilyGo T-Echo, LoRaWAN gateway RAK7246G / RAK5146 and TTN
+LoRaWAN implementation with temperature, humidity, and CO2 sensor / display based on LilyGo T-Echo, LoRaWAN gateway RAK7246G / RAK5146, TTN, and Datacake
 
 ## Project plan
 1. connect temperature / humidity sensor SHT31 to T-Echo Lite ==> achieved
@@ -46,7 +46,10 @@ LoRaWAN implementation with temperature and humidity sensor / display based on L
   - Configure the Gateway for TTN acc. 2. and 4.
   - verify / change connection to TTN server as for RAK7246G
 
-## 4. Register gateway in TTN
+## 4. Register application and gateway in TTN
+- register application with TTN (outdated, still helpful)
+  - [RAK7246G LoRaWAN Network Server Guide](https://docs.rakwireless.com/product-categories/wisgate/rak7246g/lorawan-network-server-guide)
+
 - register the gateway with TTN (outdated, still helpful)
   - [RAK7246G LoRaWAN Network Server Guide](https://docs.rakwireless.com/product-categories/wisgate/rak7246g/lorawan-network-server-guide)
 
@@ -57,15 +60,15 @@ LoRaWAN implementation with temperature and humidity sensor / display based on L
   - [Setup LoRaWAN gateway on TTN Gateway Pro](https://www.thethingsindustries.com/docs/getting-started/3-try-starter-kit/)
     - for RAK LoRa gateway: ensure disabling authenticated connection
 
-## 5. Get TTN application keys
-- register application with TTN (outdated, still helpful)
-  - [RAK7246G LoRaWAN Network Server Guide](https://docs.rakwireless.com/product-categories/wisgate/rak7246g/lorawan-network-server-guide)
+## 5. Get TTN device keys
 - create a custom end device in TTN console (application section)
   - JoinEUI: enter 00 00 00 00 00 00 00 00
   - DevEUI: use generate button to create new device ID
   - AppKey: use generate button to create new application key
   - configure CayenneLPP decoder for end-device
-  - LoRa version 1.0.3
+- select LoRa parameters
+  - LoRa version 1.0.3 (works with RadioLib)
+  - bandwith plan according to region e.g., EU 863-870 SF90 RX2
 
 ## 6. Send measurements to TTN
 - use RadioLib in LoRaWAN mode
@@ -130,9 +133,6 @@ function Decoder(bytes, port) {
 }
 ```
 
-    - fields: create TEMPERATURE and HUMIDITY fields with Numeric type and appropriate semantic
-- create dashboards (e.g., chart with two data linesd) using the fields according to needs 
-
 ## 8. Implement power saving mode for T-Echo Lite
 - implement System ON Sleep mode with RAM retention for nRF52
   - considering only uplink to TTN for RadioLib
@@ -141,6 +141,7 @@ function Decoder(bytes, port) {
   
 ## 9. Add CO2 sensor for full air quality monitoring
 - add SCD40 sensor to I2C bus
+  - follow the connecvtivity plan in 1.
 - extend the software to handle multiple sensors
   - introduce automatic detection of supported sensor types
   - add CO2 concentration to CayenneLLP payload

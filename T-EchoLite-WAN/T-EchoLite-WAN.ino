@@ -75,6 +75,21 @@ void setRfSwitchState(uint8_t state) {
   }
 }
 
+// Custom delay function:
+void customDelay(RadioLibTime_t ms) {
+  // Communication over LoRaWAN includes a lot of delays.
+  // By default, RadioLib will use the Arduino delay() function,
+  // which will waste a lot of power. However, you can put your
+  // microcontroller to sleep instead by customizing the function below,
+  // and providing it to RadioLib via "node.setSleepFunction".
+  // NOTE: You ahve to ensure that this function is timed precisely, and
+  //       does actually wait for the amount of time specified!
+  //       Failure to do so will result in missed downlinks or failed join!
+  // this is just an example, so we use the Arduino delay() function,
+  // but you can put your microcontroller to sleep here
+  ::delay(ms);
+}
+
 void Start_TTN_Join() {
   Serial.println("Initialisiere Radio-Hardware...");
 
@@ -134,6 +149,9 @@ void Start_TTN_Join() {
   }
 
   Serial.println("Radio init success!");
+
+  // Optionally provide a custom sleep function
+  loraWAN.setSleepFunction(customDelay);
 
   // ... OTAA Start ...
 
@@ -308,10 +326,12 @@ float handleDisplayADC(float t, float h, uint16_t co2) {
   }
 
   // Batteriespannung im selben Puffer ergänzen
+  display.setTextSize(1);
+  display.setCursor(5, 170);
   if (adc > 0) {
-    display.setTextSize(1);
-    display.setCursor(5, 170);
     display.printf("Battery: %.03f V", batteryVoltage);
+  } else {
+    display.printf("%08X%08X", (uint32_t)(devEUI >> 32), (uint32_t)(devEUI & 0xFFFFFFFF));
   }
 
   display.display();
