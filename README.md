@@ -9,7 +9,7 @@ LoRaWAN implementation with temperature, humidity, and CO2 sensor / display base
 5. create application in TTN and get the TTN keys for the end device ==> achieved
 6. extend the code on T-Echo Lite about LoRaWAN implementation (device activation, measurement upload) ==> achieved
 7. Connect an IoT data dashboard to the data in TTN (with Datacake) ==> achieved
-8. implement System ON Sleep mode with RAM retention for nRF52 ==> started
+8. implement sleep mode with RAM retention for nRF52 ==> achieved
 9. complete the sensor set to full air quality monitoring ==> started
 
 ## 1. Connect sensor to T-Echo
@@ -134,10 +134,12 @@ function Decoder(bytes, port) {
 ```
 
 ## 8. Implement power saving mode for T-Echo Lite
-- implement System ON Sleep mode with RAM retention for nRF52
+- implement sleep mode with RAM retention for nRF52
   - considering only uplink to TTN for RadioLib
   - using the 2min cycle implemented in measurement upload to TTN / Datacake
-  - intermediate solution: delay(1000) in loop()
+  - solution: 
+    - delay() in loop()
+	- custom delay for RadioLib
   
 ## 9. Add CO2 sensor for full air quality monitoring
 - add SCD40 sensor to I2C bus
