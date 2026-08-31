@@ -18,7 +18,7 @@ SX1262 radio = new Module(SX1262_CS, SX1262_DIO1, SX1262_RST, SX1262_BUSY, Custo
 
 // Instanz für die Sensoren erstellen
 Adafruit_SHT31 sht31 = Adafruit_SHT31();  // Globales Objekt SHT31
-SensirionI2cScd4x scd4x;
+SensirionI2cScd4x scd41;
 
 // trigger battery measurement
 bool manualTrigger = false;
@@ -41,7 +41,7 @@ uint16_t lastSentCO2 = 0;
 
 // Heartbeat
 static unsigned long lastHeartbeatMillis = 0;
-const unsigned long HEARTBEAT_INTERVAL = 30UL * 60UL * 1000UL;  // 30 Minuten Heartbeat
+const unsigned long HEARTBEAT_INTERVAL = 20UL * 60UL * 1000UL;  // 20 Minuten Heartbeat = 1/2 of datacake offline period
 
 // daily battery measurement
 static unsigned long lastDailyBatteryMillis = 0;
@@ -57,7 +57,7 @@ static unsigned long lastSensorMillis = -2 * 60000;
 
 // Sensor support
 bool hasSHT31 = false;
-bool hasSCD4X = false;
+bool hasSCD41 = false;
 
 void External_Interrupt_Triggered() {
   KET1_Triggered_Flag = true;
@@ -217,7 +217,23 @@ void setup(void) {
   delay(100);
   Wire.setPins(35, 36);
   Wire.begin();
-  delay(100);
+
+  // for SCD41
+  Wire.setClock(100000);  // Auf sichere 100 kHz Standard-Modus drosseln
+
+  // Wichtig: Dem SCD41 ausreichend Zeit zum Booten geben (mind. 1000ms)
+  delay(1000);
+
+  Serial.println("Starte I2C-Scanner...");
+  byte count = 0;
+  for (byte i = 8; i < 120; i++) {
+    Wire.beginTransmission(i);
+    if (Wire.endTransmission() == 0) {
+      Serial.printf("I2C-Gerät gefunden auf Adresse: 0x%02X\n", i);
+      count++;
+    }
+  }
+  Serial.printf("Scanner fertig. %d Geräte gefunden.\n", count);
 
   // 3. Sensor SHT31 initialisieren
   if (!sht31.begin(0x44)) {
@@ -227,17 +243,22 @@ void setup(void) {
     Serial.println("SHT3x bereit.");
   }
 
-  // 4. Sensor SCD4X initialisieren
+  // 4. Sensor SCD41 initialisieren
   uint16_t error;
-  scd4x.begin(Wire, 0x62);
-  error = scd4x.stopPeriodicMeasurement();
+  scd41.begin(Wire, SCD41_I2C_ADDR_62);
+
+  // Wichtig: Dem Sensor erst signalisieren, dass er aufwachen soll
+  error = scd41.wakeUp();
+  delay(20);  // kurze Erholungszeit nach dem Aufwach-Befehl
+
+  error = scd41.stopPeriodicMeasurement();
   if (error) {
-    Serial.print("SCD4X nicht gefunden! Fehler: ");
+    Serial.print("SCD41 nicht gefunden! Fehler: ");
     Serial.printf("%d", error);
     Serial.println();
   } else {
-    hasSCD4X = true;
-    Serial.println("SCD4X bereit.");
+    hasSCD41 = true;
+    Serial.println("SCD41 bereit.");
   }
 
   // enable  battery measurement
@@ -269,23 +290,41 @@ void handleManualTrigger(bool trigger) {
   delay(5);
 }
 
-void handleLoadMeasurements(float *t, float *h, uint16_t *co2) {
+bool handleLoadMeasurements(float *t, float *h, uint16_t *co2) {
+  bool success = false;
+
   // 1. I2C Bus aktiv für die Messung vorbereiten
   Wire.begin();
 
-  if (hasSCD4X) {
-    scd4x.readMeasurement(*co2, *t, *h);  // CO2 auslesen
+  // SCD41
+  if (hasSCD41) {
+    // wake-up and power-down only if sampling rate is above 380sec (acc. docs)
+    // scd41.wakeUp();
+    // delay(30); // Kurze Wartezeit nach dem Aufwach-Befehl laut Sensirion-Spec
+    uint16_t error = scd41.measureAndReadSingleShot(*co2, *t, *h);  // CO2 auslesen
+    // scd41.powerDown();
+
+    if (error) {
+      Serial.print("Fehler beim Auslesen: ");
+      Serial.println(error);
+    } else {
+      Serial.printf("CO2: %d ppm, Temp: %.2f °C, Hum: %.2f %%\n", *co2, *t, *h);
+
+      success = true;
+    }
   } else {
-    *co2 = 0;  // Sauberer Default-Wert, wenn kein SCD4X da ist
+    *co2 = 0;  // Sauberer Default-Wert, wenn kein SCD41 da ist
   }
+
+  // SHT31
   if (hasSHT31) {
     *t = sht31.readTemperature();
     *h = sht31.readHumidity();
+
+    success = true;
   }
 
-  // 2. I2C Bus sofort wieder "hart" beenden/freigeben
-  // Das verhindert, dass die I2C-Hardware auf den Pins hängen bleibt
-  // Wire.end();
+  return success;
 }
 
 float handleDisplayADC(float t, float h, uint16_t co2) {
@@ -320,7 +359,7 @@ float handleDisplayADC(float t, float h, uint16_t co2) {
   display.printf("%.1f C", t);
   display.setCursor(5, 90);
   display.printf("%.1f %%", h);
-  if (hasSCD4X) {
+  if (hasSCD41) {
     display.setCursor(5, 140);
     display.printf("%3d ppm", co2);
   }
@@ -362,8 +401,8 @@ void handleLoRaSending(float t, float h, uint16_t co2, float batteryVoltage) {
   if (batteryVoltage > 0)
     lpp.addAnalogInput(3, batteryVoltage);
   // Kanal 4: CO2
-  if (hasSCD4X) {
-    lpp.addConcentration(4, co2);  // Nur wenn SCD4X aktiv ist, wandert CO2 in den Uplink
+  if (hasSCD41) {
+    lpp.addConcentration(4, co2);  // Nur wenn SCD41 aktiv ist, wandert CO2 in den Uplink
   }
   Serial.println("Sende Uplink an TTN...");
 
@@ -428,10 +467,10 @@ void loop() {
       }
     }
 
-    float t;
-    float h;
+    float t = -999;
+    float h = -999;
     uint16_t co2 = 0;
-    handleLoadMeasurements(&t, &h, &co2);
+    bool success = handleLoadMeasurements(&t, &h, &co2);
     Serial.printf("Sensor-Messwerte -> T: %.2f, H: %.2f, CO2: %d\n", t, h, co2);
 
     if (!isnan(t)) {
@@ -441,7 +480,7 @@ void loop() {
       if (loRaWAN_started) {
         bool sendReasonTempChange = (abs(t - lastSentTemp) >= TEMP_THRESHOLD);
         bool sendReasonHumChange = (abs(h - lastSentHum) >= HUM_THRESHOLD);
-        bool sendReasonCO2Change = (abs(h - lastSentCO2) >= CO2_THRESHOLD);
+        bool sendReasonCO2Change = (abs((int)co2 - (int)lastSentCO2) >= CO2_THRESHOLD);
         bool sendReasonHeartbeat = (currentMillis - lastHeartbeatMillis >= HEARTBEAT_INTERVAL);
 
         // Wenn sich genug geändert hat, ein Heartbeat fällig ist ODER der Button gedrückt wurde:
