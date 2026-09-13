@@ -27,28 +27,30 @@ LoRaWAN implementation with temperature, humidity, and CO2 sensor / display base
 
 ## 3. Configure gateway
 - configure gateway network, internet access, LoRa band, TTN network
-### RAK7246G:
+### RAK7246G / RAK7248G:
   - [RAK7246G Quick Start Guide](https://docs.rakwireless.com/product-categories/wisgate/rak7246g/quickstart)
+  - [RAK7246G Quick Start Guide](https://docs.rakwireless.com/product-categories/wisgate/rak7248/quickstart/)
   - verify / change the TTN server name to new TTN V3 name (assuming EU1 selected in gateway setup in TTN; check the gateway configuration in general settings in TTN console; s. chapter Register gateway in TTN; assuming ask-it as organization name): ask-it.eu1.cloud.thethings.industries
   - enable and restart LoRa services (assuming service name ttn-gateway): sudo systemctl enable ttn-gateway | sudo systemctl start ttn-gateway | sudo systemctl status ttn-gateway
   - verify communication of the gateway with TTN: sudo journalctl -u ttn-gateway -f 
   - verify gateway connectivity status in TTN console (should be Connected)
 ### RAK5146 PiHAT Kit for LoRaWAN and Concentrator (SPI model)
-  - [1. RAK5146 Setup with LoRa Basic Station](https://lora.vsb.cz/index.php/433-868-mhz-rak5146l-rak5146-lora-basics-station/)
-  - [2. Setting Up a LoRa Gateway with Raspberry Pi and RAK5146](https://medium.com/@techworldthink/setting-up-a-lora-gateway-with-raspberry-pi-and-rak5146-f1af49a84ff7)
-  - [3. RAK Common for Gateway](https://github.com/RAKWireless/rak_common_for_gateway)
-  - [4. RAK2287 Quick Start Guide](https://docs.rakwireless.com/product-categories/wislink/rak5146/quickstart/)
-    - original RAK firmware did not work for me
-	- decided for standard PI OS installation (OS Lite 32bit) usage of RAK Common package for gateway
-  - Raspberry Pi OS setup acc. 1.
-  - Remote connection via SSH acc. 1.
-  - Post-installation steps (Update, upgrade and reboot Raspberry Pi) acc. 1
-  - Setup Raspberry Pi’s Interfaces (SPI, I2C, Serial) acc. 1.
-    - ? add user to the dialout group with: sudo usermod -a -G dialout $USER
-  - Install RAK Common for Gateway acc. 2. and 3.
-  - Configure the Gateway for TTN acc. 2. and 4.
-    - ? change the forwarder configuration: sudo nano /opt/ttn-gateway/packet_forwarder/lora_pkt_fwd/start.sh | sudo nano /opt/ttn-gateway/packet_forwarder/lora_pkt_fwd/reset_lgw.sh.sh | RESET_GPIO=25
-  - verify / change connection to TTN server as for RAK7246G
+  - referenced documentation:
+    - [1. RAK5146 Setup with LoRa Basic Station](https://lora.vsb.cz/index.php/433-868-mhz-rak5146l-rak5146-lora-basics-station/)
+    - [2. Setting Up a LoRa Gateway with Raspberry Pi and RAK5146](https://medium.com/@techworldthink/setting-up-a-lora-gateway-with-raspberry-pi-and-rak5146-f1af49a84ff7)
+    - [3. RAK Common for Gateway](https://github.com/RAKWireless/rak_common_for_gateway)
+    - [4. RAK2287 Quick Start Guide](https://docs.rakwireless.com/product-categories/wislink/rak5146/quickstart/)
+  - RAK PiOS approach chosen:
+    - [image download](https://github.com/RAKWireless/rakpios/releases/download/2026-08-07-rakpios-1.0.0-trixie-arm64/20260807-rakpios-1.0.0-arm64-lite.img.xz) 
+    - [Quick start guide](https://docs.rakwireless.com/product-categories/software-apis-and-libraries/rakpios/quickstart)
+    - 1. flash the image
+	- 2. initial boot / reboot
+	- 3. startup with WiFi AP mode
+	- 4. change network configuration
+	- 5. post-installation steps (update, upgrade and reboot)
+	- 6. install / update rakpios-cli
+	- 7. select UDP packet forwarder, change the server name in environment variables, update the garteway EUI in TTN
+	- 8. start the service and observe the logs in cli / connectivity status in TTN
 
 ## 4. Register application and gateway in TTN
 - register application with TTN (outdated, still helpful)
